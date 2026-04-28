@@ -390,18 +390,24 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 39f7a9945e0aa55be98d471f8f31a2ab, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  gridSize: 10
+  gridSize: 5
   gridPointPrefab: {fileID: 0}
   gridPointColor: {r: 0.5, g: 0.5, b: 0.5, a: 0.5}
   pathSegmentPrefab: {fileID: 5444689254253435870, guid: e707d0cddbd0ffcb7b42a5245618cd5e, type: 3}
-  pathLength: 10
+  pathLength: 2
   numberOfTurns: 3
   displayTime: 1
   segmentDelay: 0.2
   flipColors: 0
+  delayBeforeRecall: 3
   tailColor: {r: 0.90588236, g: 0.29803923, b: 0.23529412, a: 1}
   bodyColor: {r: 0.20392157, g: 0.59607846, b: 0.85882354, a: 1}
   headColor: {r: 0.18039216, g: 0.8, b: 0.44313726, a: 1}
+  numberOfSnakes: 2
+  numberOfDummySnakes: 1
+  snake2BodyColor: {r: 0, g: 1, b: 1, a: 1}
+  snake3BodyColor: {r: 1, g: 0, b: 1, a: 1}
+  dummySnakeColor: {r: 0.6, g: 0.6, b: 0.6, a: 1}
   titleText: {fileID: 0}
   messageText: {fileID: 1057402406}
   scoreText: {fileID: 122306965}

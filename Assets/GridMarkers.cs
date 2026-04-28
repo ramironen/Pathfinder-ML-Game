@@ -40,6 +40,7 @@ public class GridMarker : MonoBehaviour
     public float displayTime = 3f;
     public float segmentDelay = 0.3f;
     public bool flipColors = false;  // If true, Red=Head, Green=Tail (reversed)
+    public float delayBeforeRecall = 0f;  // Seconds to wait after path disappears before player can trace
 
     // Path colors
     public Color tailColor = Color.red;
@@ -49,9 +50,12 @@ public class GridMarker : MonoBehaviour
     // Multiple snakes settings
     [Header("Multiple Snakes")]
     [Range(1, 3)]
-    public int numberOfSnakes = 1;  // 1-3 snakes to memorize and trace in order
+    public int numberOfSnakes = 1;  // 1-3 real snakes to memorize and trace in order
+    [Range(0, 2)]
+    public int numberOfDummySnakes = 0;  // 0-2 dummy snakes (distractors, don't trace)
     public Color snake2BodyColor = Color.cyan;
     public Color snake3BodyColor = Color.magenta;
+    public Color dummySnakeColor = new Color(0.6f, 0.6f, 0.6f, 1f);  // Gray for dummy snakes
     
     // Computed colors (swapped if flipColors is true)
     private Color ActualTailColor => flipColors ? headColor : tailColor;
@@ -100,9 +104,11 @@ public class GridMarker : MonoBehaviour
     private List<GameObject> targetPathSegments = new List<GameObject>();
     
     // Multiple snakes data
-    private List<List<Vector2Int>> allTargetPaths = new List<List<Vector2Int>>();
+    private List<List<Vector2Int>> allTargetPaths = new List<List<Vector2Int>>();  // Real snakes only
+    private List<List<Vector2Int>> dummyPaths = new List<List<Vector2Int>>();      // Dummy snakes
     private List<List<GameObject>> allTargetPathSegments = new List<List<GameObject>>();
-    private int currentSnakeIndex = 0;  // Which snake the player is currently tracing (0-based)
+    private List<List<GameObject>> dummyPathSegments = new List<List<GameObject>>();
+    private int currentSnakeIndex = 0;  // Which real snake the player is currently tracing (0-based)
 
     // User's drawn path
     private List<Vector2Int> userPath = new List<Vector2Int>();
@@ -491,7 +497,9 @@ public class GridMarker : MonoBehaviour
             DisplayTime = displayTime,
             SegmentDelay = segmentDelay,
             FlipColors = flipColors ? 1 : 0,
+            DelayBeforeRecall = delayBeforeRecall,
             NumberOfSnakes = numberOfSnakes,
+            NumberOfDummySnakes = numberOfDummySnakes,
             ChancesPerPath = chancesPerPath,
             PathsTotal = pathsCount,
             Success = successCount,
@@ -678,13 +686,14 @@ public class GridMarker : MonoBehaviour
 
         // Clear all previous paths
         allTargetPaths.Clear();
+        dummyPaths.Clear();
         allUsedCells.Clear();
         currentSnakeIndex = 0;
 
         // Reset chances for new path set
         remainingChances = chancesPerPath;
 
-        // Generate all snakes
+        // Generate all real snakes
         bool allValid = true;
         for (int snakeIdx = 0; snakeIdx < numberOfSnakes; snakeIdx++)
         {
@@ -710,6 +719,34 @@ public class GridMarker : MonoBehaviour
                 allValid = false;
                 Debug.LogWarning("Could not generate valid path for snake " + (snakeIdx + 1));
                 break;
+            }
+        }
+        
+        // Generate dummy snakes (distractors)
+        if (allValid)
+        {
+            for (int dummyIdx = 0; dummyIdx < numberOfDummySnakes; dummyIdx++)
+            {
+                List<Vector2Int> dummyPath = new List<Vector2Int>();
+                bool validPath = false;
+                
+                for (int attempt = 0; attempt < 100 && !validPath; attempt++)
+                {
+                    validPath = TryGenerateSnakePath(dummyPath);
+                }
+                
+                if (validPath)
+                {
+                    dummyPaths.Add(dummyPath);
+                    foreach (var cell in dummyPath)
+                    {
+                        allUsedCells.Add(cell);
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning("Could not generate dummy snake " + (dummyIdx + 1) + ", continuing without it");
+                }
             }
         }
 
@@ -919,32 +956,69 @@ public class GridMarker : MonoBehaviour
         ClearAllTargetPathSegments();
         SetPlayerVisible(false);
 
-        string msg = numberOfSnakes > 1 
-            ? "Watch " + numberOfSnakes + " snakes!" 
+        int totalSnakes = numberOfSnakes + dummyPaths.Count;
+        string msg = totalSnakes > 1 
+            ? "Watch " + totalSnakes + " snakes!" 
             : "Watch the path!";
+        if (dummyPaths.Count > 0)
+            msg += " (Some are FAKE!)";
         if (flipColors)
             msg += " (FLIPPED)";
         ShowMessage(msg);
 
         // Initialize segment lists for each snake
         allTargetPathSegments.Clear();
+        dummyPathSegments.Clear();
         for (int s = 0; s < numberOfSnakes; s++)
         {
             allTargetPathSegments.Add(new List<GameObject>());
         }
+        for (int s = 0; s < dummyPaths.Count; s++)
+        {
+            dummyPathSegments.Add(new List<GameObject>());
+        }
+        
+        // Build display order - shuffle real and dummy snakes together
+        List<int> displayOrder = new List<int>();
+        for (int i = 0; i < numberOfSnakes; i++)
+            displayOrder.Add(i);  // Real snakes: 0, 1, 2...
+        for (int i = 0; i < dummyPaths.Count; i++)
+            displayOrder.Add(-(i + 1));  // Dummy snakes: -1, -2...
+        
+        // Shuffle display order
+        for (int i = displayOrder.Count - 1; i > 0; i--)
+        {
+            int j = Random.Range(0, i + 1);
+            int temp = displayOrder[i];
+            displayOrder[i] = displayOrder[j];
+            displayOrder[j] = temp;
+        }
 
-        // Display all snakes one by one
-        for (int snakeIdx = 0; snakeIdx < numberOfSnakes; snakeIdx++)
+        // Display all snakes in shuffled order
+        int realSnakeDisplayNum = 0;
+        for (int displayIdx = 0; displayIdx < displayOrder.Count; displayIdx++)
         {
             if (sessionEnded)
                 yield break;
-                
-            List<Vector2Int> snakePath = allTargetPaths[snakeIdx];
-            Color snakeBodyColor = GetSnakeBodyColor(snakeIdx);
             
-            if (numberOfSnakes > 1)
+            int snakeId = displayOrder[displayIdx];
+            bool isDummy = snakeId < 0;
+            int actualIdx = isDummy ? (-snakeId - 1) : snakeId;
+            
+            List<Vector2Int> snakePath = isDummy ? dummyPaths[actualIdx] : allTargetPaths[actualIdx];
+            Color snakeBodyColor = isDummy ? dummySnakeColor : GetSnakeBodyColor(actualIdx);
+            
+            if (totalSnakes > 1)
             {
-                ShowMessage("Snake " + (snakeIdx + 1) + " of " + numberOfSnakes);
+                if (isDummy)
+                {
+                    ShowMessage("Watch this one...");
+                }
+                else
+                {
+                    realSnakeDisplayNum++;
+                    ShowMessage("Snake " + realSnakeDisplayNum + " - REMEMBER THIS!");
+                }
                 yield return new WaitForSeconds(0.5f);
             }
 
@@ -965,15 +1039,30 @@ public class GridMarker : MonoBehaviour
                 SpriteRenderer sr = segment.GetComponent<SpriteRenderer>();
                 if (sr != null)
                 {
-                    if (i == 0)
-                        sr.color = ActualTailColor;      // First = tail
-                    else if (i == snakePath.Count - 1)
-                        sr.color = ActualHeadColor;      // Last = head
+                    if (isDummy)
+                    {
+                        // Dummy snakes are all gray - no tail/head colors
+                        sr.color = dummySnakeColor;
+                    }
                     else
-                        sr.color = snakeBodyColor;       // Middle = body (snake-specific color)
+                    {
+                        if (i == 0)
+                            sr.color = ActualTailColor;      // First = tail
+                        else if (i == snakePath.Count - 1)
+                            sr.color = ActualHeadColor;      // Last = head
+                        else
+                            sr.color = snakeBodyColor;       // Middle = body (snake-specific color)
+                    }
                 }
 
-                allTargetPathSegments[snakeIdx].Add(segment);
+                if (isDummy)
+                {
+                    dummyPathSegments[actualIdx].Add(segment);
+                }
+                else
+                {
+                    allTargetPathSegments[actualIdx].Add(segment);
+                }
                 targetPathSegments.Add(segment);  // Also add to legacy list for cleanup
 
                 // Wait before showing next segment
@@ -981,7 +1070,7 @@ public class GridMarker : MonoBehaviour
             }
             
             // Small pause between snakes
-            if (snakeIdx < numberOfSnakes - 1)
+            if (displayIdx < displayOrder.Count - 1)
             {
                 yield return new WaitForSeconds(0.3f);
             }
@@ -990,7 +1079,12 @@ public class GridMarker : MonoBehaviour
         if (sessionEnded)
             yield break;
 
-        ShowMessage("Memorize " + (numberOfSnakes > 1 ? "all " + numberOfSnakes + "!" : "it!"));
+        string memMsg = "Memorize the COLORED ones!";
+        if (numberOfSnakes == 1 && dummyPaths.Count == 0)
+            memMsg = "Memorize it!";
+        else if (dummyPaths.Count == 0)
+            memMsg = "Memorize all " + numberOfSnakes + "!";
+        ShowMessage(memMsg);
 
         // Wait for display time with all paths visible
         yield return new WaitForSeconds(displayTime);
@@ -1000,6 +1094,17 @@ public class GridMarker : MonoBehaviour
 
         // Remove all segments
         ClearAllTargetPathSegments();
+        
+        // Delay before recall (memory retention test)
+        if (delayBeforeRecall > 0f)
+        {
+            ShowMessage("Wait...");
+            SetPlayerVisible(false);
+            yield return new WaitForSeconds(delayBeforeRecall);
+            
+            if (sessionEnded)
+                yield break;
+        }
 
         // Transition to wait for tail state - start with snake 1
         currentState = GameState.WaitForTail;
@@ -1124,12 +1229,16 @@ public class GridMarker : MonoBehaviour
             // Check if there are more snakes to trace
             if (currentSnakeIndex < numberOfSnakes - 1)
             {
+                // Show message before incrementing
+                int completedSnake = currentSnakeIndex + 1;  // 1-indexed for display
+                int nextSnake = currentSnakeIndex + 2;       // 1-indexed for display
+                
                 // Move to next snake
                 currentSnakeIndex++;
                 targetPath = allTargetPaths[currentSnakeIndex];
                 ClearUserPath();
                 currentState = GameState.WaitForTail;
-                ShowMessage("Snake " + currentSnakeIndex + " done! Trace Snake " + (currentSnakeIndex + 1) + "!");
+                ShowMessage("Snake " + completedSnake + " done! Now trace Snake " + nextSnake + "!");
             }
             else
             {
