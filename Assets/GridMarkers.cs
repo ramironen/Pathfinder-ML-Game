@@ -5,18 +5,32 @@ using System.Collections.Generic;
 
 public class GridMarker : MonoBehaviour
 {
-    // Grid bounds (0-6 for X, 0-5 for Y)
-    private const int MAX_X = 6;
-    private const int MAX_Y = 5;
+    // Grid settings (configurable)
+    [Header("Grid Settings")]
+    public int gridSize = 7;  // Square grid: gridSize x gridSize cells (0 to gridSize-1)
+    public GameObject gridPointPrefab;  // Optional: custom prefab for grid points
+    public Color gridPointColor = new Color(0.5f, 0.5f, 0.5f, 1f);  // Gray, solid
+    
+    // Grid bounds (computed from gridSize)
+    private int MaxX => gridSize - 1;
+    private int MaxY => gridSize - 1;
 
     // Current grid position (integers)
     private int gridX = 0;
     private int gridY = 0;
 
-    // Grid settings
+    // Grid layout
     private const float CELL_SIZE = 2f;
-    private const float ORIGIN_X = 0f;
-    private const float ORIGIN_Y = 0f;
+    private float originX = 0f;  // Will be calculated to center grid
+    private float originY = 0f;  // Will be calculated to center grid
+    
+    // Dynamic grid visuals
+    private List<GameObject> gridPointObjects = new List<GameObject>();
+    
+    // Color direction indicator objects
+    private GameObject indicatorFrom;
+    private GameObject indicatorArrow;
+    private GameObject indicatorTo;
 
     // Path display settings
     [Header("Path Display")]
@@ -25,17 +39,24 @@ public class GridMarker : MonoBehaviour
     public int numberOfTurns = 1;
     public float displayTime = 3f;
     public float segmentDelay = 0.3f;
+    public bool flipColors = false;  // If true, Red=Head, Green=Tail (reversed)
 
     // Path colors
     public Color tailColor = Color.red;
     public Color bodyColor = Color.blue;
     public Color headColor = Color.green;
+    
+    // Computed colors (swapped if flipColors is true)
+    private Color ActualTailColor => flipColors ? headColor : tailColor;
+    private Color ActualHeadColor => flipColors ? tailColor : headColor;
 
     // UI Elements
     [Header("UI")]
+    public Text titleText;        // "PathFinder" title above grid
     public Text messageText;
     public Text scoreText;
     public Text sessionTimerText;
+    public Text flipIndicatorText; // Shows color mode indicator
 
     // Score tracking
     private int pathsCount = 0;
@@ -83,6 +104,11 @@ public class GridMarker : MonoBehaviour
 
     void Start()
     {
+        CenterGridInView();
+        GenerateGridVisuals();
+        PositionUIRelativeToGrid();
+        UpdateFlipIndicator();
+        
         gridX = 0;
         gridY = 0;
         UpdateWorldPosition();
@@ -97,6 +123,229 @@ public class GridMarker : MonoBehaviour
         UpdateSessionTimerDisplay();
 
         playerSpriteRenderer = GetComponent<SpriteRenderer>();
+    }
+    
+    void UpdateFlipIndicator()
+    {
+        // Update text indicator if assigned
+        if (flipIndicatorText != null)
+        {
+            if (flipColors)
+            {
+                flipIndicatorText.text = "⚠ FLIPPED";
+                flipIndicatorText.color = Color.yellow;
+            }
+            else
+            {
+                flipIndicatorText.text = "";  // Hide text when normal
+            }
+        }
+        
+        // Create visual color indicator icons
+        CreateColorDirectionIndicator();
+    }
+    
+    void CreateColorDirectionIndicator()
+    {
+        // Destroy existing indicators
+        if (indicatorFrom != null) Destroy(indicatorFrom);
+        if (indicatorArrow != null) Destroy(indicatorArrow);
+        if (indicatorTo != null) Destroy(indicatorTo);
+        
+        // Calculate position: left of grid (vertically centered), horizontal layout
+        float gridWorldWidth = (gridSize - 1) * CELL_SIZE;
+        float gridLeftX = -gridWorldWidth / 2f;
+        
+        float indicatorStartX = gridLeftX - CELL_SIZE * 4f;  // Left of grid
+        float indicatorY = 0f;  // Vertically centered
+        float spacing = CELL_SIZE * 0.8f;
+        
+        // Create "From" color square (tail color) - left
+        if (pathSegmentPrefab != null)
+        {
+            indicatorFrom = Instantiate(pathSegmentPrefab, 
+                new Vector3(indicatorStartX, indicatorY, -0.2f), Quaternion.identity);
+            indicatorFrom.transform.localScale = Vector3.one * 0.6f;  // Smaller
+            SpriteRenderer sr = indicatorFrom.GetComponent<SpriteRenderer>();
+            if (sr != null) sr.color = ActualTailColor;
+        }
+        
+        // Create arrow (black bar pointing right) - middle
+        if (pathSegmentPrefab != null)
+        {
+            indicatorArrow = Instantiate(pathSegmentPrefab,
+                new Vector3(indicatorStartX + spacing, indicatorY, -0.2f), Quaternion.identity);
+            indicatorArrow.transform.localScale = new Vector3(1.2f, 0.15f, 1f);  // Longer and thinner (arrow-like)
+            SpriteRenderer sr = indicatorArrow.GetComponent<SpriteRenderer>();
+            if (sr != null) sr.color = Color.black;
+        }
+        
+        // Create "To" color square (head color) - right
+        if (pathSegmentPrefab != null)
+        {
+            indicatorTo = Instantiate(pathSegmentPrefab,
+                new Vector3(indicatorStartX + spacing * 2, indicatorY, -0.2f), Quaternion.identity);
+            indicatorTo.transform.localScale = Vector3.one * 0.6f;  // Smaller
+            SpriteRenderer sr = indicatorTo.GetComponent<SpriteRenderer>();
+            if (sr != null) sr.color = ActualHeadColor;
+        }
+    }
+    
+    void CenterGridInView()
+    {
+        // Calculate grid dimensions
+        float gridWorldWidth = (gridSize - 1) * CELL_SIZE;
+        float gridWorldHeight = (gridSize - 1) * CELL_SIZE;
+        
+        // Center the grid at world origin (0,0)
+        originX = -gridWorldWidth / 2f;
+        originY = -gridWorldHeight / 2f;
+        
+        // Adjust camera
+        Camera mainCam = Camera.main;
+        if (mainCam != null)
+        {
+            // Center camera at origin
+            mainCam.transform.position = new Vector3(0f, 0f, mainCam.transform.position.z);
+            
+            // Adjust orthographic size to fit grid + UI margins
+            if (mainCam.orthographic)
+            {
+                float verticalSize = (gridWorldHeight / 2f) + CELL_SIZE * 4f;  // Space for title and message
+                float horizontalSize = ((gridWorldWidth / 2f) + CELL_SIZE * 5f) / mainCam.aspect;  // Space for score
+                mainCam.orthographicSize = Mathf.Max(verticalSize, horizontalSize);
+            }
+        }
+    }
+    
+    void PositionUIRelativeToGrid()
+    {
+        Camera mainCam = Camera.main;
+        if (mainCam == null) return;
+        
+        // Calculate grid boundaries in world space (grid is now centered at 0,0)
+        float gridWorldWidth = (gridSize - 1) * CELL_SIZE;
+        float gridWorldHeight = (gridSize - 1) * CELL_SIZE;
+        float gridTopY = gridWorldHeight / 2f;
+        float gridBottomY = -gridWorldHeight / 2f;
+        float gridRightX = gridWorldWidth / 2f;
+        
+        // Convert world positions to screen positions
+        Vector3 gridTopCenter = mainCam.WorldToScreenPoint(new Vector3(0f, gridTopY + CELL_SIZE * 5f, 0f));
+        Vector3 gridBottomCenter = mainCam.WorldToScreenPoint(new Vector3(0f, gridBottomY - CELL_SIZE * 2.5f, 0f));
+        Vector3 gridTopRight = mainCam.WorldToScreenPoint(new Vector3(gridRightX + CELL_SIZE * 4f, gridTopY, 0f));
+        Vector3 gridMidRight = mainCam.WorldToScreenPoint(new Vector3(gridRightX + CELL_SIZE * 4f, 0f, 0f));
+        
+        // Position title above grid center
+        if (titleText != null)
+        {
+            RectTransform titleRect = titleText.GetComponent<RectTransform>();
+            if (titleRect != null)
+            {
+                titleRect.position = gridTopCenter;
+            }
+        }
+        
+        // Position message text below grid (centered)
+        if (messageText != null)
+        {
+            RectTransform msgRect = messageText.GetComponent<RectTransform>();
+            if (msgRect != null)
+            {
+                msgRect.position = gridBottomCenter;
+            }
+        }
+        
+        // Position timer to the right of the grid (top right)
+        if (sessionTimerText != null)
+        {
+            RectTransform timerRect = sessionTimerText.GetComponent<RectTransform>();
+            if (timerRect != null)
+            {
+                timerRect.position = gridTopRight;
+            }
+        }
+        
+        // Position score to the right of the grid (middle right)
+        if (scoreText != null)
+        {
+            RectTransform scoreRect = scoreText.GetComponent<RectTransform>();
+            if (scoreRect != null)
+            {
+                scoreRect.position = gridMidRight;
+            }
+        }
+        
+        // Position flip indicator below title, above grid
+        if (flipIndicatorText != null)
+        {
+            RectTransform flipRect = flipIndicatorText.GetComponent<RectTransform>();
+            if (flipRect != null)
+            {
+                Vector3 flipIndicatorPos = mainCam.WorldToScreenPoint(new Vector3(0f, gridTopY + CELL_SIZE * 3.5f, 0f));
+                flipRect.position = flipIndicatorPos;
+            }
+        }
+    }
+    
+    void GenerateGridVisuals()
+    {
+        // Clear existing grid points
+        foreach (GameObject obj in gridPointObjects)
+        {
+            if (obj != null) Destroy(obj);
+        }
+        gridPointObjects.Clear();
+        
+        // Generate new grid points based on gridSize
+        // Use the same prefab as path segments to get same size
+        for (int x = 0; x < gridSize; x++)
+        {
+            for (int y = 0; y < gridSize; y++)
+            {
+                float worldX = originX + (x * CELL_SIZE);
+                float worldY = originY + (y * CELL_SIZE);
+                
+                GameObject gridPoint;
+                if (pathSegmentPrefab != null)
+                {
+                    // Use same prefab as path segments (same size as red/green squares)
+                    gridPoint = Instantiate(pathSegmentPrefab, new Vector3(worldX, worldY, 0.1f), Quaternion.identity);
+                }
+                else if (gridPointPrefab != null)
+                {
+                    gridPoint = Instantiate(gridPointPrefab, new Vector3(worldX, worldY, 0.1f), Quaternion.identity);
+                }
+                else
+                {
+                    // Create a simple square if no prefab assigned
+                    gridPoint = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                    gridPoint.transform.position = new Vector3(worldX, worldY, 0.1f);
+                    gridPoint.transform.localScale = new Vector3(1f, 1f, 1f);
+                    
+                    // Remove collider (not needed for visual)
+                    Collider col = gridPoint.GetComponent<Collider>();
+                    if (col != null) Destroy(col);
+                }
+                
+                // Set gray color
+                SpriteRenderer sr = gridPoint.GetComponent<SpriteRenderer>();
+                if (sr != null)
+                {
+                    sr.color = gridPointColor;
+                }
+                else
+                {
+                    Renderer rend = gridPoint.GetComponent<Renderer>();
+                    if (rend != null)
+                    {
+                        rend.material.color = gridPointColor;
+                    }
+                }
+                
+                gridPointObjects.Add(gridPoint);
+            }
+        }
     }
 
     void OnApplicationQuit()
@@ -209,6 +458,10 @@ public class GridMarker : MonoBehaviour
             ? PathfinderRegistrationSnapshot.GameDurationSeconds
             : PlayerPrefs.GetInt("GameDurationSeconds", 60);
 
+        float difficultyScore = CalculateDifficultyScore(pathLength, numberOfTurns, displayTime, segmentDelay);
+        float successRate = pathsCount > 0 ? (float)successCount / pathsCount : 0f;
+        float performanceGrade = CalculatePerformanceGrade(successRate, difficultyScore);
+
         return new SessionCsvPayload
         {
             EndReason = endReason,
@@ -217,16 +470,41 @@ public class GridMarker : MonoBehaviour
             PlayerGender = playerGender,
             IsRegistered = isRegistered,
             GameDurationSeconds = gameDurationSeconds,
+            GridSize = gridSize,
             PathLength = pathLength,
             NumberOfTurns = numberOfTurns,
             DisplayTime = displayTime,
             SegmentDelay = segmentDelay,
+            FlipColors = flipColors ? 1 : 0,
             ChancesPerPath = chancesPerPath,
             PathsTotal = pathsCount,
             Success = successCount,
             Fail = failCount,
-            SecondsPlayed = Mathf.RoundToInt(sessionPlaySecondsAccumulated)
+            SecondsPlayed = Mathf.RoundToInt(sessionPlaySecondsAccumulated),
+            DifficultyScore = difficultyScore,
+            SuccessRate = successRate,
+            PerformanceGrade = performanceGrade
         };
+    }
+
+    /// <summary>
+    /// Calculates difficulty score based on game parameters.
+    /// Formula: (PathLength * 10) + (Turns * 15) - (DisplayTime * 5) - (SegmentDelay * 10)
+    /// Higher score = harder task.
+    /// </summary>
+    static float CalculateDifficultyScore(int pathLen, int turns, float dispTime, float segDelay)
+    {
+        return (pathLen * 10f) + (turns * 15f) - (dispTime * 5f) - (segDelay * 10f);
+    }
+
+    /// <summary>
+    /// Calculates performance grade normalized against default difficulty (67).
+    /// Formula: SuccessRate * 100 * (DifficultyScore / 67)
+    /// </summary>
+    static float CalculatePerformanceGrade(float successRate, float difficultyScore)
+    {
+        const float BaseDifficulty = 67f;
+        return successRate * 100f * (difficultyScore / BaseDifficulty);
     }
 
     void WriteSessionEndStats(string endReason)
@@ -325,7 +603,7 @@ public class GridMarker : MonoBehaviour
                 if (userPathSegments.Count > 0)
                 {
                     SpriteRenderer sr = userPathSegments[userPathSegments.Count - 1].GetComponent<SpriteRenderer>();
-                    if (sr != null) sr.color = headColor;
+                    if (sr != null) sr.color = ActualHeadColor;
                 }
                 ShowMessage("Done! Press SPACE to check");
             }
@@ -341,7 +619,7 @@ public class GridMarker : MonoBehaviour
     {
         bool moved = false;
 
-        if (Input.GetKeyDown(KeyCode.RightArrow) && gridX < MAX_X)
+        if (Input.GetKeyDown(KeyCode.RightArrow) && gridX < MaxX)
         {
             gridX++;
             moved = true;
@@ -351,7 +629,7 @@ public class GridMarker : MonoBehaviour
             gridX--;
             moved = true;
         }
-        else if (Input.GetKeyDown(KeyCode.UpArrow) && gridY < MAX_Y)
+        else if (Input.GetKeyDown(KeyCode.UpArrow) && gridY < MaxY)
         {
             gridY++;
             moved = true;
@@ -372,8 +650,8 @@ public class GridMarker : MonoBehaviour
 
     void UpdateWorldPosition()
     {
-        float worldX = ORIGIN_X + (gridX * CELL_SIZE);
-        float worldY = ORIGIN_Y + (gridY * CELL_SIZE);
+        float worldX = originX + (gridX * CELL_SIZE);
+        float worldY = originY + (gridY * CELL_SIZE);
         transform.position = new Vector3(worldX, worldY, -0.05f);
     }
 
@@ -410,8 +688,8 @@ public class GridMarker : MonoBehaviour
         HashSet<Vector2Int> usedCells = new HashSet<Vector2Int>();
 
         // Random start position
-        int startX = Random.Range(0, MAX_X + 1);
-        int startY = Random.Range(0, MAX_Y + 1);
+        int startX = Random.Range(0, gridSize);
+        int startY = Random.Range(0, gridSize);
         Vector2Int startPos = new Vector2Int(startX, startY);
         targetPath.Add(startPos);
         usedCells.Add(startPos);
@@ -440,7 +718,7 @@ public class GridMarker : MonoBehaviour
                 currentY += dy[currentDir];
 
                 // Check bounds
-                if (currentX < 0 || currentX > MAX_X || currentY < 0 || currentY > MAX_Y)
+                if (currentX < 0 || currentX > MaxX || currentY < 0 || currentY > MaxY)
                 {
                     return false; // Invalid path - out of bounds
                 }
@@ -505,7 +783,10 @@ public class GridMarker : MonoBehaviour
         ClearTargetPathSegments();
         SetPlayerVisible(false);
 
-        ShowMessage("Watch the path!");
+        if (flipColors)
+            ShowMessage("FLIPPED! Green=Start, Red=End");
+        else
+            ShowMessage("Watch the path!");
 
         // Spawn segments one by one with delay
         for (int i = 0; i < targetPath.Count; i++)
@@ -514,22 +795,22 @@ public class GridMarker : MonoBehaviour
                 yield break;
 
             Vector2Int gridPos = targetPath[i];
-            float worldX = ORIGIN_X + (gridPos.x * CELL_SIZE);
-            float worldY = ORIGIN_Y + (gridPos.y * CELL_SIZE);
+            float worldX = originX + (gridPos.x * CELL_SIZE);
+            float worldY = originY + (gridPos.y * CELL_SIZE);
 
             GameObject segment = Instantiate(pathSegmentPrefab,
                 new Vector3(worldX, worldY, 0f), Quaternion.identity);
 
-            // Set color based on position
+            // Set color based on position (use Actual colors which respect flipColors)
             SpriteRenderer sr = segment.GetComponent<SpriteRenderer>();
             if (sr != null)
             {
                 if (i == 0)
-                    sr.color = tailColor;      // First = tail (red)
+                    sr.color = ActualTailColor;      // First = tail
                 else if (i == targetPath.Count - 1)
-                    sr.color = headColor;      // Last = head (green)
+                    sr.color = ActualHeadColor;      // Last = head
                 else
-                    sr.color = bodyColor;      // Middle = body (blue)
+                    sr.color = bodyColor;            // Middle = body (blue)
             }
 
             targetPathSegments.Add(segment);
@@ -589,8 +870,8 @@ public class GridMarker : MonoBehaviour
         userPath.Add(gridPos);
         visitedCells.Add(gridPos);
 
-        float worldX = ORIGIN_X + (gridPos.x * CELL_SIZE);
-        float worldY = ORIGIN_Y + (gridPos.y * CELL_SIZE);
+        float worldX = originX + (gridPos.x * CELL_SIZE);
+        float worldY = originY + (gridPos.y * CELL_SIZE);
 
         GameObject segment = Instantiate(pathSegmentPrefab,
             new Vector3(worldX, worldY, -0.1f), Quaternion.identity); // Slightly in front
@@ -598,7 +879,7 @@ public class GridMarker : MonoBehaviour
         SpriteRenderer sr = segment.GetComponent<SpriteRenderer>();
         if (sr != null)
         {
-            sr.color = isTail ? tailColor : bodyColor;
+            sr.color = isTail ? ActualTailColor : bodyColor;
         }
 
         userPathSegments.Add(segment);
@@ -707,8 +988,8 @@ public class GridMarker : MonoBehaviour
                 yield break;
 
             Vector2Int gridPos = targetPath[i];
-            float worldX = ORIGIN_X + (gridPos.x * CELL_SIZE);
-            float worldY = ORIGIN_Y + (gridPos.y * CELL_SIZE);
+            float worldX = originX + (gridPos.x * CELL_SIZE);
+            float worldY = originY + (gridPos.y * CELL_SIZE);
 
             GameObject segment = Instantiate(pathSegmentPrefab,
                 new Vector3(worldX, worldY, 0f), Quaternion.identity);
@@ -717,9 +998,9 @@ public class GridMarker : MonoBehaviour
             if (sr != null)
             {
                 if (i == 0)
-                    sr.color = tailColor;
+                    sr.color = ActualTailColor;
                 else if (i == targetPath.Count - 1)
-                    sr.color = headColor;
+                    sr.color = ActualHeadColor;
                 else
                     sr.color = bodyColor;
             }

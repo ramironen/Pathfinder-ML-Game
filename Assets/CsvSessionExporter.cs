@@ -15,15 +15,20 @@ public struct SessionCsvPayload
     public string PlayerGender;
     public int IsRegistered;
     public int GameDurationSeconds;
+    public int GridSize;
     public int PathLength;
     public int NumberOfTurns;
     public float DisplayTime;
     public float SegmentDelay;
+    public int FlipColors;
     public int ChancesPerPath;
     public int PathsTotal;
     public int Success;
     public int Fail;
     public int SecondsPlayed;
+    public float DifficultyScore;
+    public float SuccessRate;
+    public float PerformanceGrade;
 }
 
 /// <summary>
@@ -42,16 +47,21 @@ public static class CsvSessionExporter
         "PlayerGender," +
         "IsRegistered [0/1]," +
         "GameDuration [s]," +
+        "GridSize [cells]," +
         "PathLength [cells]," +
         "NumberOfTurns [-]," +
         "DisplayTime [s]," +
         "SegmentDelay [s]," +
+        "FlipColors [0/1]," +
         "ChancesPerPath [-]," +
         "PathsTotal [-]," +
         "Success [-]," +
         "Fail [-]," +
         "EndReason [-]," +
-        "SecondsPlayed [s]";
+        "SecondsPlayed [s]," +
+        "DifficultyScore [-]," +
+        "SuccessRate [0-1]," +
+        "PerformanceGrade [-]";
 
     /// <summary>
     /// Editor / desktop player: CSV next to the project or install folder (parent of Assets / *_Data).
@@ -82,16 +92,21 @@ public static class CsvSessionExporter
             Escape(p.PlayerGender),
             p.IsRegistered.ToString(CultureInfo.InvariantCulture),
             p.GameDurationSeconds.ToString(CultureInfo.InvariantCulture),
+            p.GridSize.ToString(CultureInfo.InvariantCulture),
             p.PathLength.ToString(CultureInfo.InvariantCulture),
             p.NumberOfTurns.ToString(CultureInfo.InvariantCulture),
             p.DisplayTime.ToString("G9", CultureInfo.InvariantCulture),
             p.SegmentDelay.ToString("F2", CultureInfo.InvariantCulture),
+            p.FlipColors.ToString(CultureInfo.InvariantCulture),
             p.ChancesPerPath.ToString(CultureInfo.InvariantCulture),
             p.PathsTotal.ToString(CultureInfo.InvariantCulture),
             p.Success.ToString(CultureInfo.InvariantCulture),
             p.Fail.ToString(CultureInfo.InvariantCulture),
             Escape(p.EndReason),
-            p.SecondsPlayed.ToString(CultureInfo.InvariantCulture)
+            p.SecondsPlayed.ToString(CultureInfo.InvariantCulture),
+            p.DifficultyScore.ToString("F2", CultureInfo.InvariantCulture),
+            p.SuccessRate.ToString("F3", CultureInfo.InvariantCulture),
+            p.PerformanceGrade.ToString("F2", CultureInfo.InvariantCulture)
         };
 
         string line = string.Join(",", cells);
