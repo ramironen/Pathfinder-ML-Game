@@ -26,7 +26,7 @@ public static class PathfinderRegistrationSnapshot
         PlayerAge = 0;
         PlayerGender = null;
         IsRegistered = 0;
-        GameDurationSeconds = 60;
+        GameDurationSeconds = 300;  // Default 5 minutes
     }
 
     /// <summary>Call only after <c>PlayerPrefs.Save()</c> for this submit (SessionId must already be set).</summary>
@@ -241,10 +241,10 @@ public class RegistrationManager : MonoBehaviour
         PlayerPrefs.SetInt("PlayerAge", 0);
         PlayerPrefs.SetString("PlayerGender", "");
         PlayerPrefs.SetInt("IsRegistered", 0);
-        PlayerPrefs.SetInt("GameDurationSeconds", 60);
+        PlayerPrefs.SetInt("GameDurationSeconds", 300);  // 5 minutes
         PlayerPrefs.Save();
 
-        PathfinderRegistrationSnapshot.Capture("Guest", 0, "", 0, 60);
+        PathfinderRegistrationSnapshot.Capture("Guest", 0, "", 0, 300);
 
         SceneManager.LoadScene("SnakeScene");
     }

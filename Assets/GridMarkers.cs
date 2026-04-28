@@ -3,7 +3,26 @@ using UnityEngine.UI;
 using System.Collections;
 using System.Collections.Generic;
 
-public class GridMarker : MonoBehaviour
+/// <summary>
+/// Settings for each difficulty stage
+/// </summary>
+[System.Serializable]
+public struct StageSettings
+{
+    public string stageName;
+    public int gridSize;
+    public int pathLength;
+    public int numberOfTurns;
+    public float displayTime;
+    public float segmentDelay;
+    public int numberOfSnakes;
+    public int numberOfDummySnakes;
+    [Range(0f, 1f)]
+    public float flipColorsProbability;
+    public float delayBeforeRecall;
+}
+
+public class GridMarkers : MonoBehaviour
 {
     // Grid settings (configurable)
     [Header("Grid Settings")]
@@ -76,8 +95,58 @@ public class GridMarker : MonoBehaviour
 
     // Chances system
     [Header("Gameplay")]
-    public int chancesPerPath = 2;
+    public int chancesPerPath = 1;  // Always 1 (no retries per path)
     private int remainingChances = 0;
+    
+    // Stage system
+    [Header("Stage Progression")]
+    public bool useStageProgression = true;  // Enable/disable stage system
+    public int pathsPerStage = 3;  // Paths to complete before evaluating stage
+    public int successesToAdvance = 2;  // Successes needed to advance (out of pathsPerStage)
+    public int maxStageRetries = 2;  // Max retries before forced advance
+    
+    public StageSettings[] stages = new StageSettings[]
+    {
+        // Stage 0: Benchmark (always same for comparison)
+        new StageSettings { stageName = "Benchmark", gridSize = 6, pathLength = 5, numberOfTurns = 2, 
+            displayTime = 0.5f, segmentDelay = 0.05f, numberOfSnakes = 1, numberOfDummySnakes = 0, 
+            flipColorsProbability = 0.2f, delayBeforeRecall = 0f },
+        // Stage 1: Easy
+        new StageSettings { stageName = "Easy", gridSize = 5, pathLength = 4, numberOfTurns = 1, 
+            displayTime = 0.5f, segmentDelay = 0.05f, numberOfSnakes = 1, numberOfDummySnakes = 0, 
+            flipColorsProbability = 0.2f, delayBeforeRecall = 0f },
+        // Stage 2: Medium
+        new StageSettings { stageName = "Medium", gridSize = 6, pathLength = 5, numberOfTurns = 2, 
+            displayTime = 0.4f, segmentDelay = 0.05f, numberOfSnakes = 1, numberOfDummySnakes = 0, 
+            flipColorsProbability = 0.3f, delayBeforeRecall = 1f },
+        // Stage 3: Hard
+        new StageSettings { stageName = "Hard", gridSize = 7, pathLength = 6, numberOfTurns = 3, 
+            displayTime = 0.3f, segmentDelay = 0.04f, numberOfSnakes = 2, numberOfDummySnakes = 1, 
+            flipColorsProbability = 0.4f, delayBeforeRecall = 2f },
+        // Stage 4: Very Hard
+        new StageSettings { stageName = "Very Hard", gridSize = 7, pathLength = 7, numberOfTurns = 4, 
+            displayTime = 0.2f, segmentDelay = 0.03f, numberOfSnakes = 2, numberOfDummySnakes = 1, 
+            flipColorsProbability = 0.5f, delayBeforeRecall = 3f },
+        // Stage 5: Expert
+        new StageSettings { stageName = "Expert", gridSize = 8, pathLength = 7, numberOfTurns = 4, 
+            displayTime = 0.1f, segmentDelay = 0.02f, numberOfSnakes = 3, numberOfDummySnakes = 2, 
+            flipColorsProbability = 0.6f, delayBeforeRecall = 3f }
+    };
+    
+    // Stage tracking
+    private int currentStage = 0;
+    private int pathsInCurrentStage = 0;
+    private int successesInCurrentStage = 0;
+    private int currentStageAttempt = 1;  // How many times tried current stage
+    private int maxStageReached = 0;
+    private int benchmarkSuccesses = 0;
+    private int benchmarkTotal = 0;
+    
+    // Stage UI
+    [Header("Stage UI")]
+    public Text stageText;  // Shows "Stage 3" 
+    public Text stageDifficultyText;  // Shows "HARD"
+    public Text stageIndicatorsText;  // Shows "⬡ ⬡ ⬡ ⬢ ⬢ ⬢"
 
     // Session timer
     private float sessionSecondsRemaining;
@@ -125,6 +194,13 @@ public class GridMarker : MonoBehaviour
 
     // Reference to player's sprite renderer
     private SpriteRenderer playerSpriteRenderer;
+    
+    // Timing measurements for ML data
+    private float sessionStartTime;  // When session started
+    private float pathStartTime;     // When player can start tracing
+    private float firstMoveTime;     // When player made first input
+    private bool firstMoveMade;      // Track if first move recorded
+    private int totalPathNumber;     // Total paths in this session (for CSV)
 
     void Start()
     {
@@ -134,25 +210,172 @@ public class GridMarker : MonoBehaviour
             Camera.main.backgroundColor = new Color(0.05f, 0.05f, 0.12f, 1f);  // Deep space dark blue
         }
         
+        // Initialize stage system
+        if (useStageProgression && stages.Length > 0)
+        {
+            currentStage = 0;
+            pathsInCurrentStage = 0;
+            successesInCurrentStage = 0;
+            currentStageAttempt = 1;
+            maxStageReached = 0;
+            totalPathNumber = 0;
+            ApplyStageSettings(stages[0]);
+        }
+        
         CenterGridInView();
         GenerateGridVisuals();
         PositionUIRelativeToGrid();
         UpdateFlipIndicator();
+        UpdateStageUI();
         
         gridX = 0;
         gridY = 0;
         UpdateWorldPosition();
         currentState = GameState.Idle;
         sessionEnded = false;
-        sessionDurationTotalSeconds = PlayerPrefs.GetInt("GameDurationSeconds", 60);
+        sessionDurationTotalSeconds = PlayerPrefs.GetInt("GameDurationSeconds", 300);  // Default 5 minutes
         sessionSecondsRemaining = sessionDurationTotalSeconds;
         sessionPlaySecondsAccumulated = 0f;
+        sessionStartTime = Time.time;
         csvRowCommitted = false;
         ShowMessage("Press SPACE to start");
         UpdateScoreDisplay();
         UpdateSessionTimerDisplay();
 
         playerSpriteRenderer = GetComponent<SpriteRenderer>();
+    }
+    
+    /// <summary>
+    /// Apply settings from a stage to the game parameters
+    /// </summary>
+    void ApplyStageSettings(StageSettings stage)
+    {
+        int oldGridSize = gridSize;
+        
+        gridSize = stage.gridSize;
+        pathLength = stage.pathLength;
+        numberOfTurns = stage.numberOfTurns;
+        displayTime = stage.displayTime;
+        segmentDelay = stage.segmentDelay;
+        numberOfSnakes = stage.numberOfSnakes;
+        numberOfDummySnakes = stage.numberOfDummySnakes;
+        delayBeforeRecall = stage.delayBeforeRecall;
+        
+        // FlipColors is random per path, decided in GenerateNewPath based on flipColorsProbability
+        
+        // Regenerate grid if size changed
+        if (oldGridSize != gridSize && gridPointObjects.Count > 0)
+        {
+            CenterGridInView();
+            GenerateGridVisuals();
+            PositionUIRelativeToGrid();
+        }
+    }
+    
+    /// <summary>
+    /// Update the trophy-style stage progress UI
+    /// </summary>
+    void UpdateStageUI()
+    {
+        if (!useStageProgression) return;
+        
+        // Update stage number text
+        if (stageText != null)
+        {
+            stageText.text = "Stage " + currentStage;
+        }
+        
+        // Update difficulty name text
+        if (stageDifficultyText != null && currentStage < stages.Length)
+        {
+            stageDifficultyText.text = stages[currentStage].stageName.ToUpper();
+        }
+        
+        // Update indicators (filled hexagons for completed, empty for remaining)
+        if (stageIndicatorsText != null)
+        {
+            string indicators = "";
+            for (int i = 0; i < stages.Length; i++)
+            {
+                if (i < currentStage)
+                    indicators += "⬢ ";  // Filled - completed
+                else if (i == currentStage)
+                    indicators += "★ ";  // Star - current
+                else
+                    indicators += "⬡ ";  // Empty - not reached
+            }
+            stageIndicatorsText.text = indicators.Trim();
+        }
+    }
+    
+    /// <summary>
+    /// Handle stage progression after a path is completed
+    /// </summary>
+    void HandleStageProgression(bool success)
+    {
+        if (!useStageProgression) return;
+        
+        pathsInCurrentStage++;
+        if (success) successesInCurrentStage++;
+        
+        // Track benchmark stats
+        if (currentStage == 0)
+        {
+            benchmarkTotal++;
+            if (success) benchmarkSuccesses++;
+        }
+        
+        // Check if we've completed enough paths in this stage
+        if (pathsInCurrentStage >= pathsPerStage)
+        {
+            if (successesInCurrentStage >= successesToAdvance)
+            {
+                // Success! Advance to next stage
+                AdvanceToNextStage();
+            }
+            else
+            {
+                // Not enough successes
+                currentStageAttempt++;
+                if (currentStageAttempt > maxStageRetries)
+                {
+                    // Stuck too long, force advance
+                    AdvanceToNextStage();
+                }
+                else
+                {
+                    // Retry same stage
+                    pathsInCurrentStage = 0;
+                    successesInCurrentStage = 0;
+                    ShowMessage("Retry Stage " + currentStage + "!");
+                }
+            }
+            UpdateStageUI();
+        }
+    }
+    
+    /// <summary>
+    /// Advance to the next difficulty stage
+    /// </summary>
+    void AdvanceToNextStage()
+    {
+        currentStage++;
+        if (currentStage > maxStageReached)
+            maxStageReached = currentStage;
+            
+        pathsInCurrentStage = 0;
+        successesInCurrentStage = 0;
+        currentStageAttempt = 1;
+        
+        if (currentStage < stages.Length)
+        {
+            ApplyStageSettings(stages[currentStage]);
+            ShowMessage("Stage " + currentStage + ": " + stages[currentStage].stageName + "!");
+        }
+        else
+        {
+            ShowMessage("All stages complete! Amazing!");
+        }
     }
     
     void UpdateFlipIndicator()
@@ -184,10 +407,11 @@ public class GridMarker : MonoBehaviour
         
         // Calculate position: left of grid (vertically centered), horizontal layout
         float gridWorldWidth = (gridSize - 1) * CELL_SIZE;
-        float gridLeftX = -gridWorldWidth / 2f;
+        float gridWorldHeight = (gridSize - 1) * CELL_SIZE;
+        float gridTopY = gridWorldHeight / 2f;
         
-        float indicatorStartX = gridLeftX - CELL_SIZE * 4f;  // Left of grid
-        float indicatorY = 0f;  // Vertically centered
+        float indicatorStartX = -CELL_SIZE * 0.5f;  // Centered horizontally (moved right)
+        float indicatorY = gridTopY + CELL_SIZE * 1.2f;  // Above the grid (moved down)
         float spacing = CELL_SIZE * 0.8f;
         
         // Create "From" color square (tail color) - left
@@ -486,12 +710,15 @@ public class GridMarker : MonoBehaviour
             : PlayerPrefs.GetInt("IsRegistered", 0);
         int gameDurationSeconds = useSnapshot
             ? PathfinderRegistrationSnapshot.GameDurationSeconds
-            : PlayerPrefs.GetInt("GameDurationSeconds", 60);
+            : PlayerPrefs.GetInt("GameDurationSeconds", 300);
 
         float difficultyScore = CalculateDifficultyScore(pathLength, numberOfTurns, displayTime, segmentDelay);
         float successRate = pathsCount > 0 ? (float)successCount / pathsCount : 0f;
         float performanceGrade = CalculatePerformanceGrade(successRate, difficultyScore);
 
+        // Calculate benchmark score
+        float benchmarkScore = benchmarkTotal > 0 ? (float)benchmarkSuccesses / benchmarkTotal : 0f;
+        
         return new SessionCsvPayload
         {
             EndReason = endReason,
@@ -516,7 +743,9 @@ public class GridMarker : MonoBehaviour
             SecondsPlayed = Mathf.RoundToInt(sessionPlaySecondsAccumulated),
             DifficultyScore = difficultyScore,
             SuccessRate = successRate,
-            PerformanceGrade = performanceGrade
+            PerformanceGrade = performanceGrade,
+            MaxStageReached = maxStageReached,
+            BenchmarkScore = benchmarkScore
         };
     }
 
@@ -675,6 +904,12 @@ public class GridMarker : MonoBehaviour
 
         if (moved)
         {
+            // Record first move time for ML data
+            if (!firstMoveMade && (currentState == GameState.WaitForTail || currentState == GameState.Drawing))
+            {
+                firstMoveTime = Time.time;
+                firstMoveMade = true;
+            }
             UpdateWorldPosition();
         }
 
@@ -692,6 +927,16 @@ public class GridMarker : MonoBehaviour
     {
         if (SessionBlocksInput())
             return;
+
+        // Increment total path counter
+        totalPathNumber++;
+        
+        // Randomly decide flipColors based on current stage probability
+        if (useStageProgression && currentStage < stages.Length)
+        {
+            flipColors = Random.value < stages[currentStage].flipColorsProbability;
+            UpdateFlipIndicator();
+        }
 
         // Clear all previous paths
         allTargetPaths.Clear();
@@ -1162,6 +1407,10 @@ public class GridMarker : MonoBehaviour
         targetPath = allTargetPaths[traceOrder[0]];  // First snake to trace (in display order)
         SetPlayerVisible(true);
         
+        // Start timing for this path
+        pathStartTime = Time.time;
+        firstMoveMade = false;
+        
         if (numberOfSnakes > 1)
             ShowMessage("Trace Snake #1! Find the " + (flipColors ? "GREEN" : "RED") + " tail");
         else
@@ -1296,6 +1545,13 @@ public class GridMarker : MonoBehaviour
                 pathsCount++;
                 successCount++;
                 UpdateScoreDisplay();
+                
+                // Log path data to CSV
+                LogPathToCSV(true);
+                
+                // Handle stage progression
+                HandleStageProgression(true);
+                
                 ShowMessage(numberOfSnakes > 1 ? "All snakes complete!" : "Great job!");
                 currentState = GameState.Success;
                 StartCoroutine(HandleSuccess());
@@ -1318,10 +1574,54 @@ public class GridMarker : MonoBehaviour
                 pathsCount++;
                 failCount++;
                 UpdateScoreDisplay();
+                
+                // Log path data to CSV
+                LogPathToCSV(false);
+                
+                // Handle stage progression
+                HandleStageProgression(false);
+                
                 currentState = GameState.Fail;
                 StartCoroutine(HandleFinalFailure());
             }
         }
+    }
+    
+    /// <summary>
+    /// Log path attempt data to per-user CSV file
+    /// </summary>
+    void LogPathToCSV(bool success)
+    {
+        float pathEndTime = Time.time;
+        float pathDurationMs = (pathEndTime - pathStartTime) * 1000f;
+        float firstMoveDelayMs = firstMoveMade ? (firstMoveTime - pathStartTime) * 1000f : -1f;
+        float timeInSessionMs = (pathEndTime - sessionStartTime) * 1000f;
+        
+        CsvPathExporter.AppendRow(new PathCsvPayload
+        {
+            PlayerName = PlayerPrefs.GetString("PlayerName", "Unknown"),
+            PlayerAge = PlayerPrefs.GetInt("PlayerAge", 0),
+            PlayerGender = PlayerPrefs.GetString("PlayerGender", "Unknown"),
+            SessionDate = System.DateTime.Now.ToString("yyyy-MM-dd"),
+            SessionID = PlayerPrefs.GetInt("SessionCount", 1),
+            PathNumber = totalPathNumber,
+            Stage = currentStage,
+            StageName = (currentStage < stages.Length) ? stages[currentStage].stageName : "Unknown",
+            StageAttempt = currentStageAttempt,
+            GridSize = gridSize,
+            PathLength = pathLength,
+            NumberOfTurns = numberOfTurns,
+            NumberOfSnakes = numberOfSnakes,
+            NumberOfDummySnakes = numberOfDummySnakes,
+            FlipColors = flipColors ? 1 : 0,
+            DisplayTime = displayTime,
+            SegmentDelay = segmentDelay,
+            DelayBeforeRecall = delayBeforeRecall,
+            Success = success ? 1 : 0,
+            PathDurationMs = pathDurationMs,
+            FirstMoveDelayMs = firstMoveDelayMs,
+            TimeInSessionMs = timeInSessionMs
+        });
     }
 
     IEnumerator RetryWithSamePath()

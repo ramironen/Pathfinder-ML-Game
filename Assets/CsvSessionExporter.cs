@@ -32,90 +32,96 @@ public struct SessionCsvPayload
     public float DifficultyScore;
     public float SuccessRate;
     public float PerformanceGrade;
+    // New fields for stage system
+    public int MaxStageReached;
+    public float BenchmarkScore;  // Success rate on stage 0 (benchmark)
 }
 
 /// <summary>
-/// Appends session rows to pathfinder_sessions.csv next to the game data folder
-/// (project root in Editor; folder containing the .exe data folder in a player build).
+/// Appends session rows to per-user CSV: {FirstName}_{LastName}_sessions.csv
 /// </summary>
 public static class CsvSessionExporter
 {
-    const string FileName = "pathfinder_sessions.csv";
-
     const string Header =
-        "PlayerNumber," +
+        "SessionNumber," +
         "Time," +
-        "PlayerName," +
-        "PlayerAge [years]," +
-        "PlayerGender," +
-        "IsRegistered [0/1]," +
         "GameDuration [s]," +
-        "GridSize [cells]," +
-        "PathLength [cells]," +
-        "NumberOfTurns [-]," +
-        "DisplayTime [s]," +
-        "SegmentDelay [s]," +
-        "FlipColors [0/1]," +
-        "DelayBeforeRecall [s]," +
-        "NumberOfSnakes [-]," +
-        "NumberOfDummySnakes [-]," +
-        "ChancesPerPath [-]," +
         "PathsTotal [-]," +
         "Success [-]," +
         "Fail [-]," +
         "EndReason [-]," +
         "SecondsPlayed [s]," +
-        "DifficultyScore [-]," +
         "SuccessRate [0-1]," +
-        "PerformanceGrade [-]";
+        "MaxStageReached [-]," +
+        "BenchmarkScore [0-1]";
 
     /// <summary>
-    /// Editor / desktop player: CSV next to the project or install folder (parent of Assets / *_Data).
-    /// Other platforms: <see cref="Application.persistentDataPath"/> (always writable).
+    /// Get the CSV file path for a specific player
     /// </summary>
-    public static string GetCsvPath()
+    public static string GetCsvPath(string playerName)
     {
+        // Sanitize player name for filename
+        string safeName = SanitizeFileName(playerName);
+        if (string.IsNullOrEmpty(safeName))
+            safeName = "Unknown_Player";
+            
+        string fileName = safeName + "_sessions.csv";
+        
 #if UNITY_EDITOR || UNITY_STANDALONE
         string parent = Directory.GetParent(Application.dataPath)?.FullName;
         if (!string.IsNullOrEmpty(parent))
-            return Path.Combine(parent, FileName);
+        {
+            string dataFolder = Path.Combine(parent, "Data");
+            if (!Directory.Exists(dataFolder))
+                Directory.CreateDirectory(dataFolder);
+            return Path.Combine(dataFolder, fileName);
+        }
 #endif
-        return Path.Combine(Application.persistentDataPath, FileName);
+        string persistentDataFolder = Path.Combine(Application.persistentDataPath, "Data");
+        if (!Directory.Exists(persistentDataFolder))
+            Directory.CreateDirectory(persistentDataFolder);
+        return Path.Combine(persistentDataFolder, fileName);
+    }
+    
+    /// <summary>
+    /// Sanitize a string for use as a filename
+    /// </summary>
+    static string SanitizeFileName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return "";
+            
+        // Replace spaces with underscores
+        string result = name.Replace(" ", "_");
+        
+        // Remove invalid filename characters
+        foreach (char c in Path.GetInvalidFileNameChars())
+        {
+            result = result.Replace(c.ToString(), "");
+        }
+        
+        return result;
     }
 
     public static void AppendRow(SessionCsvPayload p)
     {
-        string path = GetCsvPath();
+        string path = GetCsvPath(p.PlayerName);
         DateTime localNow = DateTime.Now;
-        int playerNumber = ComputeNextPlayerNumber(path);
+        int sessionNumber = ComputeNextSessionNumber(path);
 
         string[] cells =
         {
-            playerNumber.ToString(CultureInfo.InvariantCulture),
+            sessionNumber.ToString(CultureInfo.InvariantCulture),
             Escape(FormatSimpleLocalTime(localNow)),
-            Escape(p.PlayerName),
-            p.PlayerAge.ToString(CultureInfo.InvariantCulture),
-            Escape(p.PlayerGender),
-            p.IsRegistered.ToString(CultureInfo.InvariantCulture),
             p.GameDurationSeconds.ToString(CultureInfo.InvariantCulture),
-            p.GridSize.ToString(CultureInfo.InvariantCulture),
-            p.PathLength.ToString(CultureInfo.InvariantCulture),
-            p.NumberOfTurns.ToString(CultureInfo.InvariantCulture),
-            p.DisplayTime.ToString("G9", CultureInfo.InvariantCulture),
-            p.SegmentDelay.ToString("F2", CultureInfo.InvariantCulture),
-            p.FlipColors.ToString(CultureInfo.InvariantCulture),
-            p.DelayBeforeRecall.ToString("F2", CultureInfo.InvariantCulture),
-            p.NumberOfSnakes.ToString(CultureInfo.InvariantCulture),
-            p.NumberOfDummySnakes.ToString(CultureInfo.InvariantCulture),
-            p.ChancesPerPath.ToString(CultureInfo.InvariantCulture),
             p.PathsTotal.ToString(CultureInfo.InvariantCulture),
             p.Success.ToString(CultureInfo.InvariantCulture),
             p.Fail.ToString(CultureInfo.InvariantCulture),
             Escape(p.EndReason),
             p.SecondsPlayed.ToString(CultureInfo.InvariantCulture),
-            p.DifficultyScore.ToString("F2", CultureInfo.InvariantCulture),
             p.SuccessRate.ToString("F3", CultureInfo.InvariantCulture),
-            p.PerformanceGrade.ToString("F2", CultureInfo.InvariantCulture)
+            p.MaxStageReached.ToString(CultureInfo.InvariantCulture),
+            p.BenchmarkScore.ToString("F3", CultureInfo.InvariantCulture)
         };
 
         string line = string.Join(",", cells);
@@ -153,7 +159,7 @@ public static class CsvSessionExporter
             local.Minute.ToString("00", CultureInfo.InvariantCulture));
     }
 
-    static int ComputeNextPlayerNumber(string path)
+    static int ComputeNextSessionNumber(string path)
     {
         if (!File.Exists(path))
             return 1;
@@ -164,8 +170,8 @@ public static class CsvSessionExporter
             if (lines.Length == 0)
                 return 1;
             string h = lines[0];
-            if (h.StartsWith("PlayerNumber", StringComparison.Ordinal) ||
-                h.StartsWith("SessionIndex", StringComparison.Ordinal))
+            if (h.StartsWith("SessionNumber", StringComparison.Ordinal) ||
+                h.StartsWith("PlayerNumber", StringComparison.Ordinal))
                 return lines.Length;
             return lines.Length + 1;
         }
