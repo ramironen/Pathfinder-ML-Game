@@ -46,6 +46,13 @@ public class GridMarker : MonoBehaviour
     public Color bodyColor = Color.blue;
     public Color headColor = Color.green;
     
+    // Multiple snakes settings
+    [Header("Multiple Snakes")]
+    [Range(1, 3)]
+    public int numberOfSnakes = 1;  // 1-3 snakes to memorize and trace in order
+    public Color snake2BodyColor = Color.cyan;
+    public Color snake3BodyColor = Color.magenta;
+    
     // Computed colors (swapped if flipColors is true)
     private Color ActualTailColor => flipColors ? headColor : tailColor;
     private Color ActualHeadColor => flipColors ? tailColor : headColor;
@@ -88,9 +95,14 @@ public class GridMarker : MonoBehaviour
 
     private GameState currentState = GameState.Idle;
 
-    // Target path (generated)
+    // Target path (generated) - for single snake (legacy, now uses allTargetPaths[0])
     private List<Vector2Int> targetPath = new List<Vector2Int>();
     private List<GameObject> targetPathSegments = new List<GameObject>();
+    
+    // Multiple snakes data
+    private List<List<Vector2Int>> allTargetPaths = new List<List<Vector2Int>>();
+    private List<List<GameObject>> allTargetPathSegments = new List<List<GameObject>>();
+    private int currentSnakeIndex = 0;  // Which snake the player is currently tracing (0-based)
 
     // User's drawn path
     private List<Vector2Int> userPath = new List<Vector2Int>();
@@ -98,6 +110,9 @@ public class GridMarker : MonoBehaviour
 
     // Track visited cells during drawing
     private HashSet<Vector2Int> visitedCells = new HashSet<Vector2Int>();
+    
+    // Track all cells used by all snakes (to prevent overlap during generation)
+    private HashSet<Vector2Int> allUsedCells = new HashSet<Vector2Int>();
 
     // Reference to player's sprite renderer
     private SpriteRenderer playerSpriteRenderer;
@@ -476,6 +491,7 @@ public class GridMarker : MonoBehaviour
             DisplayTime = displayTime,
             SegmentDelay = segmentDelay,
             FlipColors = flipColors ? 1 : 0,
+            NumberOfSnakes = numberOfSnakes,
             ChancesPerPath = chancesPerPath,
             PathsTotal = pathsCount,
             Success = successCount,
@@ -660,26 +676,135 @@ public class GridMarker : MonoBehaviour
         if (SessionBlocksInput())
             return;
 
-        targetPath.Clear();
+        // Clear all previous paths
+        allTargetPaths.Clear();
+        allUsedCells.Clear();
+        currentSnakeIndex = 0;
 
-        // Reset chances for new path
+        // Reset chances for new path set
         remainingChances = chancesPerPath;
 
-        // Try to generate valid path (max 100 attempts)
-        bool validPath = false;
-        for (int attempt = 0; attempt < 100 && !validPath; attempt++)
+        // Generate all snakes
+        bool allValid = true;
+        for (int snakeIdx = 0; snakeIdx < numberOfSnakes; snakeIdx++)
         {
-            validPath = TryGeneratePath();
+            List<Vector2Int> snakePath = new List<Vector2Int>();
+            bool validPath = false;
+            
+            for (int attempt = 0; attempt < 100 && !validPath; attempt++)
+            {
+                validPath = TryGenerateSnakePath(snakePath);
+            }
+            
+            if (validPath)
+            {
+                allTargetPaths.Add(snakePath);
+                // Add all cells to used set to prevent overlap
+                foreach (var cell in snakePath)
+                {
+                    allUsedCells.Add(cell);
+                }
+            }
+            else
+            {
+                allValid = false;
+                Debug.LogWarning("Could not generate valid path for snake " + (snakeIdx + 1));
+                break;
+            }
         }
 
-        if (validPath)
+        // Set targetPath to first snake for compatibility
+        if (allTargetPaths.Count > 0)
         {
-            StartCoroutine(DisplayTargetPathCoroutine(true));
+            targetPath = allTargetPaths[0];
+        }
+
+        if (allValid && allTargetPaths.Count == numberOfSnakes)
+        {
+            StartCoroutine(DisplayAllSnakesCoroutine());
         }
         else
         {
-            Debug.LogWarning("Could not generate valid path");
+            Debug.LogWarning("Could not generate all snakes");
         }
+    }
+    
+    bool TryGenerateSnakePath(List<Vector2Int> path)
+    {
+        path.Clear();
+        HashSet<Vector2Int> usedCells = new HashSet<Vector2Int>(allUsedCells);  // Include already used cells
+
+        // Random start position (not already used)
+        int startX, startY;
+        int maxStartAttempts = 50;
+        Vector2Int startPos;
+        do
+        {
+            startX = Random.Range(0, gridSize);
+            startY = Random.Range(0, gridSize);
+            startPos = new Vector2Int(startX, startY);
+            maxStartAttempts--;
+        } while (usedCells.Contains(startPos) && maxStartAttempts > 0);
+        
+        if (usedCells.Contains(startPos))
+            return false;
+            
+        path.Add(startPos);
+        usedCells.Add(startPos);
+
+        // Directions: 0=right, 1=up, 2=left, 3=down
+        int[] dx = { 1, 0, -1, 0 };
+        int[] dy = { 0, 1, 0, -1 };
+
+        // Pick random initial direction
+        int currentDir = Random.Range(0, 4);
+
+        // Calculate segment lengths between turns
+        List<int> segmentLengths = DivideLength(pathLength - 1, numberOfTurns + 1);
+
+        int currentX = startX;
+        int currentY = startY;
+
+        for (int seg = 0; seg < segmentLengths.Count; seg++)
+        {
+            int segLength = segmentLengths[seg];
+
+            // Move in current direction for segLength cells
+            for (int i = 0; i < segLength; i++)
+            {
+                currentX += dx[currentDir];
+                currentY += dy[currentDir];
+
+                // Check bounds
+                if (currentX < 0 || currentX > MaxX || currentY < 0 || currentY > MaxY)
+                {
+                    return false; // Invalid path - out of bounds
+                }
+
+                Vector2Int newPos = new Vector2Int(currentX, currentY);
+
+                // Check if cell already used (path crosses itself or another snake)
+                if (usedCells.Contains(newPos))
+                {
+                    return false; // Invalid path - crosses itself or another snake
+                }
+
+                path.Add(newPos);
+                usedCells.Add(newPos);
+            }
+
+            // Turn 90 degrees (if not last segment)
+            if (seg < segmentLengths.Count - 1)
+            {
+                // Turn left or right randomly
+                if (Random.Range(0, 2) == 0)
+                    currentDir = (currentDir + 1) % 4; // Turn left
+                else
+                    currentDir = (currentDir + 3) % 4; // Turn right
+            }
+        }
+
+        return true;
     }
 
     bool TryGeneratePath()
@@ -774,69 +899,143 @@ public class GridMarker : MonoBehaviour
         return lengths;
     }
 
-    IEnumerator DisplayTargetPathCoroutine(bool isNewPath)
+    Color GetSnakeBodyColor(int snakeIndex)
+    {
+        switch (snakeIndex)
+        {
+            case 0: return bodyColor;        // Snake 1: Blue
+            case 1: return snake2BodyColor;  // Snake 2: Cyan
+            case 2: return snake3BodyColor;  // Snake 3: Magenta
+            default: return bodyColor;
+        }
+    }
+    
+    IEnumerator DisplayAllSnakesCoroutine()
     {
         if (sessionEnded)
             yield break;
 
         currentState = GameState.ShowingPath;
-        ClearTargetPathSegments();
+        ClearAllTargetPathSegments();
         SetPlayerVisible(false);
 
+        string msg = numberOfSnakes > 1 
+            ? "Watch " + numberOfSnakes + " snakes!" 
+            : "Watch the path!";
         if (flipColors)
-            ShowMessage("FLIPPED! Green=Start, Red=End");
-        else
-            ShowMessage("Watch the path!");
+            msg += " (FLIPPED)";
+        ShowMessage(msg);
 
-        // Spawn segments one by one with delay
-        for (int i = 0; i < targetPath.Count; i++)
+        // Initialize segment lists for each snake
+        allTargetPathSegments.Clear();
+        for (int s = 0; s < numberOfSnakes; s++)
+        {
+            allTargetPathSegments.Add(new List<GameObject>());
+        }
+
+        // Display all snakes one by one
+        for (int snakeIdx = 0; snakeIdx < numberOfSnakes; snakeIdx++)
         {
             if (sessionEnded)
                 yield break;
-
-            Vector2Int gridPos = targetPath[i];
-            float worldX = originX + (gridPos.x * CELL_SIZE);
-            float worldY = originY + (gridPos.y * CELL_SIZE);
-
-            GameObject segment = Instantiate(pathSegmentPrefab,
-                new Vector3(worldX, worldY, 0f), Quaternion.identity);
-
-            // Set color based on position (use Actual colors which respect flipColors)
-            SpriteRenderer sr = segment.GetComponent<SpriteRenderer>();
-            if (sr != null)
+                
+            List<Vector2Int> snakePath = allTargetPaths[snakeIdx];
+            Color snakeBodyColor = GetSnakeBodyColor(snakeIdx);
+            
+            if (numberOfSnakes > 1)
             {
-                if (i == 0)
-                    sr.color = ActualTailColor;      // First = tail
-                else if (i == targetPath.Count - 1)
-                    sr.color = ActualHeadColor;      // Last = head
-                else
-                    sr.color = bodyColor;            // Middle = body (blue)
+                ShowMessage("Snake " + (snakeIdx + 1) + " of " + numberOfSnakes);
+                yield return new WaitForSeconds(0.5f);
             }
 
-            targetPathSegments.Add(segment);
+            // Spawn segments one by one with delay
+            for (int i = 0; i < snakePath.Count; i++)
+            {
+                if (sessionEnded)
+                    yield break;
 
-            // Wait before showing next segment
-            yield return new WaitForSeconds(segmentDelay);
+                Vector2Int gridPos = snakePath[i];
+                float worldX = originX + (gridPos.x * CELL_SIZE);
+                float worldY = originY + (gridPos.y * CELL_SIZE);
+
+                GameObject segment = Instantiate(pathSegmentPrefab,
+                    new Vector3(worldX, worldY, 0f), Quaternion.identity);
+
+                // Set color based on position
+                SpriteRenderer sr = segment.GetComponent<SpriteRenderer>();
+                if (sr != null)
+                {
+                    if (i == 0)
+                        sr.color = ActualTailColor;      // First = tail
+                    else if (i == snakePath.Count - 1)
+                        sr.color = ActualHeadColor;      // Last = head
+                    else
+                        sr.color = snakeBodyColor;       // Middle = body (snake-specific color)
+                }
+
+                allTargetPathSegments[snakeIdx].Add(segment);
+                targetPathSegments.Add(segment);  // Also add to legacy list for cleanup
+
+                // Wait before showing next segment
+                yield return new WaitForSeconds(segmentDelay);
+            }
+            
+            // Small pause between snakes
+            if (snakeIdx < numberOfSnakes - 1)
+            {
+                yield return new WaitForSeconds(0.3f);
+            }
         }
 
         if (sessionEnded)
             yield break;
 
-        ShowMessage("Memorize it!");
+        ShowMessage("Memorize " + (numberOfSnakes > 1 ? "all " + numberOfSnakes + "!" : "it!"));
 
-        // Wait for display time with full path visible
+        // Wait for display time with all paths visible
         yield return new WaitForSeconds(displayTime);
 
         if (sessionEnded)
             yield break;
 
         // Remove all segments
-        ClearTargetPathSegments();
+        ClearAllTargetPathSegments();
 
-        // Transition to wait for tail state
+        // Transition to wait for tail state - start with snake 1
         currentState = GameState.WaitForTail;
+        currentSnakeIndex = 0;
+        targetPath = allTargetPaths[0];  // Set current target to first snake
         SetPlayerVisible(true);
-        ShowMessage("Your turn!");
+        
+        if (numberOfSnakes > 1)
+            ShowMessage("Trace Snake 1! Find the " + (flipColors ? "GREEN" : "RED") + " tail");
+        else
+            ShowMessage("Your turn!");
+    }
+    
+    void ClearAllTargetPathSegments()
+    {
+        foreach (var segmentList in allTargetPathSegments)
+        {
+            foreach (GameObject seg in segmentList)
+            {
+                if (seg != null) Destroy(seg);
+            }
+        }
+        allTargetPathSegments.Clear();
+        
+        // Also clear legacy list
+        foreach (GameObject seg in targetPathSegments)
+        {
+            if (seg != null) Destroy(seg);
+        }
+        targetPathSegments.Clear();
+    }
+
+    IEnumerator DisplayTargetPathCoroutine(bool isNewPath)
+    {
+        // Legacy function - redirect to new multi-snake display
+        yield return StartCoroutine(DisplayAllSnakesCoroutine());
     }
 
     void ClearTargetPathSegments()
@@ -903,7 +1102,7 @@ public class GridMarker : MonoBehaviour
 
         bool success = true;
 
-        // Check if paths match
+        // Check if paths match for current snake
         if (userPath.Count != targetPath.Count)
         {
             success = false;
@@ -922,12 +1121,26 @@ public class GridMarker : MonoBehaviour
 
         if (success)
         {
-            pathsCount++;
-            successCount++;
-            UpdateScoreDisplay();
-            ShowMessage("Great job!");
-            currentState = GameState.Success;
-            StartCoroutine(HandleSuccess());
+            // Check if there are more snakes to trace
+            if (currentSnakeIndex < numberOfSnakes - 1)
+            {
+                // Move to next snake
+                currentSnakeIndex++;
+                targetPath = allTargetPaths[currentSnakeIndex];
+                ClearUserPath();
+                currentState = GameState.WaitForTail;
+                ShowMessage("Snake " + currentSnakeIndex + " done! Trace Snake " + (currentSnakeIndex + 1) + "!");
+            }
+            else
+            {
+                // All snakes completed!
+                pathsCount++;
+                successCount++;
+                UpdateScoreDisplay();
+                ShowMessage(numberOfSnakes > 1 ? "All snakes complete!" : "Great job!");
+                currentState = GameState.Success;
+                StartCoroutine(HandleSuccess());
+            }
         }
         else
         {
@@ -936,7 +1149,7 @@ public class GridMarker : MonoBehaviour
 
             if (remainingChances > 0)
             {
-                ShowMessage("Try again!");
+                ShowMessage("Try again! Snake " + (currentSnakeIndex + 1));
                 ClearUserPath();
                 currentState = GameState.Fail;
                 StartCoroutine(RetryWithSamePath());
@@ -957,7 +1170,10 @@ public class GridMarker : MonoBehaviour
         yield return new WaitForSeconds(1.5f);
         if (sessionEnded)
             yield break;
-        StartCoroutine(DisplayTargetPathCoroutine(false));
+        // Reset to first snake and show all again
+        currentSnakeIndex = 0;
+        targetPath = allTargetPaths[0];
+        StartCoroutine(DisplayAllSnakesCoroutine());
     }
 
     IEnumerator HandleSuccess()

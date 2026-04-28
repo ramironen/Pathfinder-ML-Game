@@ -21,6 +21,7 @@ public struct SessionCsvPayload
     public float DisplayTime;
     public float SegmentDelay;
     public int FlipColors;
+    public int NumberOfSnakes;
     public int ChancesPerPath;
     public int PathsTotal;
     public int Success;
@@ -53,6 +54,7 @@ public static class CsvSessionExporter
         "DisplayTime [s]," +
         "SegmentDelay [s]," +
         "FlipColors [0/1]," +
+        "NumberOfSnakes [-]," +
         "ChancesPerPath [-]," +
         "PathsTotal [-]," +
         "Success [-]," +
@@ -98,6 +100,7 @@ public static class CsvSessionExporter
             p.DisplayTime.ToString("G9", CultureInfo.InvariantCulture),
             p.SegmentDelay.ToString("F2", CultureInfo.InvariantCulture),
             p.FlipColors.ToString(CultureInfo.InvariantCulture),
+            p.NumberOfSnakes.ToString(CultureInfo.InvariantCulture),
             p.ChancesPerPath.ToString(CultureInfo.InvariantCulture),
             p.PathsTotal.ToString(CultureInfo.InvariantCulture),
             p.Success.ToString(CultureInfo.InvariantCulture),
