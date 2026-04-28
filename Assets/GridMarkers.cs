@@ -9,7 +9,7 @@ public class GridMarker : MonoBehaviour
     [Header("Grid Settings")]
     public int gridSize = 7;  // Square grid: gridSize x gridSize cells (0 to gridSize-1)
     public GameObject gridPointPrefab;  // Optional: custom prefab for grid points
-    public Color gridPointColor = new Color(0.5f, 0.5f, 0.5f, 1f);  // Gray, solid
+    public Color gridPointColor = new Color(0.12f, 0.16f, 0.2f, 1f);  // Dark blue-gray (matches dark theme)
     
     // Grid bounds (computed from gridSize)
     private int MaxX => gridSize - 1;
@@ -108,7 +108,10 @@ public class GridMarker : MonoBehaviour
     private List<List<Vector2Int>> dummyPaths = new List<List<Vector2Int>>();      // Dummy snakes
     private List<List<GameObject>> allTargetPathSegments = new List<List<GameObject>>();
     private List<List<GameObject>> dummyPathSegments = new List<List<GameObject>>();
-    private int currentSnakeIndex = 0;  // Which real snake the player is currently tracing (0-based)
+    private int currentSnakeIndex = 0;  // Index into traceOrder (which snake to trace next)
+    private List<int> savedDisplayOrder = new List<int>();  // Saved display order for retries
+    private List<int> traceOrder = new List<int>();  // Order to trace real snakes (indices into allTargetPaths)
+    private bool isRetry = false;  // Track if this is a retry (don't reshuffle)
 
     // User's drawn path
     private List<Vector2Int> userPath = new List<Vector2Int>();
@@ -125,6 +128,12 @@ public class GridMarker : MonoBehaviour
 
     void Start()
     {
+        // Set camera background to dark space color (matches theme)
+        if (Camera.main != null)
+        {
+            Camera.main.backgroundColor = new Color(0.05f, 0.05f, 0.12f, 1f);  // Deep space dark blue
+        }
+        
         CenterGridInView();
         GenerateGridVisuals();
         PositionUIRelativeToGrid();
@@ -186,7 +195,7 @@ public class GridMarker : MonoBehaviour
         {
             indicatorFrom = Instantiate(pathSegmentPrefab, 
                 new Vector3(indicatorStartX, indicatorY, -0.2f), Quaternion.identity);
-            indicatorFrom.transform.localScale = Vector3.one * 0.6f;  // Smaller
+            indicatorFrom.transform.localScale = Vector3.one * 5f;  // Adjusted for 4x prefab scale
             SpriteRenderer sr = indicatorFrom.GetComponent<SpriteRenderer>();
             if (sr != null) sr.color = ActualTailColor;
         }
@@ -196,7 +205,7 @@ public class GridMarker : MonoBehaviour
         {
             indicatorArrow = Instantiate(pathSegmentPrefab,
                 new Vector3(indicatorStartX + spacing, indicatorY, -0.2f), Quaternion.identity);
-            indicatorArrow.transform.localScale = new Vector3(1.2f, 0.15f, 1f);  // Longer and thinner (arrow-like)
+            indicatorArrow.transform.localScale = new Vector3(10f, 1.2f, 1f);  // Arrow shape (adjusted for 4x prefab scale)
             SpriteRenderer sr = indicatorArrow.GetComponent<SpriteRenderer>();
             if (sr != null) sr.color = Color.black;
         }
@@ -206,7 +215,7 @@ public class GridMarker : MonoBehaviour
         {
             indicatorTo = Instantiate(pathSegmentPrefab,
                 new Vector3(indicatorStartX + spacing * 2, indicatorY, -0.2f), Quaternion.identity);
-            indicatorTo.transform.localScale = Vector3.one * 0.6f;  // Smaller
+            indicatorTo.transform.localScale = Vector3.one * 5f;  // Adjusted for 4x prefab scale
             SpriteRenderer sr = indicatorTo.GetComponent<SpriteRenderer>();
             if (sr != null) sr.color = ActualHeadColor;
         }
@@ -689,6 +698,8 @@ public class GridMarker : MonoBehaviour
         dummyPaths.Clear();
         allUsedCells.Clear();
         currentSnakeIndex = 0;
+        isRetry = false;  // New path, will shuffle display order
+        savedDisplayOrder.Clear();
 
         // Reset chances for new path set
         remainingChances = chancesPerPath;
@@ -708,10 +719,18 @@ public class GridMarker : MonoBehaviour
             if (validPath)
             {
                 allTargetPaths.Add(snakePath);
-                // Add all cells to used set to prevent overlap
+                // Add all cells AND their neighbors to used set (1-cell buffer between snakes)
                 foreach (var cell in snakePath)
                 {
                     allUsedCells.Add(cell);
+                    // Add all 8 neighboring cells as buffer
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        for (int dy = -1; dy <= 1; dy++)
+                        {
+                            allUsedCells.Add(new Vector2Int(cell.x + dx, cell.y + dy));
+                        }
+                    }
                 }
             }
             else
@@ -738,9 +757,18 @@ public class GridMarker : MonoBehaviour
                 if (validPath)
                 {
                     dummyPaths.Add(dummyPath);
+                    // Add all cells AND their neighbors to used set (1-cell buffer between snakes)
                     foreach (var cell in dummyPath)
                     {
                         allUsedCells.Add(cell);
+                        // Add all 8 neighboring cells as buffer
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            for (int dy = -1; dy <= 1; dy++)
+                            {
+                                allUsedCells.Add(new Vector2Int(cell.x + dx, cell.y + dy));
+                            }
+                        }
                     }
                 }
                 else
@@ -978,20 +1006,41 @@ public class GridMarker : MonoBehaviour
             dummyPathSegments.Add(new List<GameObject>());
         }
         
-        // Build display order - shuffle real and dummy snakes together
-        List<int> displayOrder = new List<int>();
-        for (int i = 0; i < numberOfSnakes; i++)
-            displayOrder.Add(i);  // Real snakes: 0, 1, 2...
-        for (int i = 0; i < dummyPaths.Count; i++)
-            displayOrder.Add(-(i + 1));  // Dummy snakes: -1, -2...
-        
-        // Shuffle display order
-        for (int i = displayOrder.Count - 1; i > 0; i--)
+        // Build display order - use saved order on retry, shuffle only on first display
+        List<int> displayOrder;
+        if (isRetry && savedDisplayOrder.Count > 0)
         {
-            int j = Random.Range(0, i + 1);
-            int temp = displayOrder[i];
-            displayOrder[i] = displayOrder[j];
-            displayOrder[j] = temp;
+            // Use the same order as before
+            displayOrder = new List<int>(savedDisplayOrder);
+        }
+        else
+        {
+            // Build and shuffle new display order
+            displayOrder = new List<int>();
+            for (int i = 0; i < numberOfSnakes; i++)
+                displayOrder.Add(i);  // Real snakes: 0, 1, 2...
+            for (int i = 0; i < dummyPaths.Count; i++)
+                displayOrder.Add(-(i + 1));  // Dummy snakes: -1, -2...
+            
+            // Shuffle display order
+            for (int i = displayOrder.Count - 1; i > 0; i--)
+            {
+                int j = Random.Range(0, i + 1);
+                int temp = displayOrder[i];
+                displayOrder[i] = displayOrder[j];
+                displayOrder[j] = temp;
+            }
+            
+            // Save for potential retry
+            savedDisplayOrder = new List<int>(displayOrder);
+            
+            // Build trace order: real snakes in the order they appear in displayOrder
+            traceOrder.Clear();
+            foreach (int id in displayOrder)
+            {
+                if (id >= 0)  // Real snake (not dummy)
+                    traceOrder.Add(id);
+            }
         }
 
         // Display all snakes in shuffled order
@@ -1012,12 +1061,13 @@ public class GridMarker : MonoBehaviour
             {
                 if (isDummy)
                 {
-                    ShowMessage("Watch this one...");
+                    ShowMessage("IGNORE this one (dummy)");
                 }
                 else
                 {
                     realSnakeDisplayNum++;
-                    ShowMessage("Snake " + realSnakeDisplayNum + " - REMEMBER THIS!");
+                    // Show which number to trace this snake (1st, 2nd, 3rd based on display order)
+                    ShowMessage("Snake #" + realSnakeDisplayNum + " - REMEMBER THIS!");
                 }
                 yield return new WaitForSeconds(0.5f);
             }
@@ -1106,14 +1156,14 @@ public class GridMarker : MonoBehaviour
                 yield break;
         }
 
-        // Transition to wait for tail state - start with snake 1
+        // Transition to wait for tail state - start with first snake in trace order
         currentState = GameState.WaitForTail;
-        currentSnakeIndex = 0;
-        targetPath = allTargetPaths[0];  // Set current target to first snake
+        currentSnakeIndex = 0;  // Index into traceOrder
+        targetPath = allTargetPaths[traceOrder[0]];  // First snake to trace (in display order)
         SetPlayerVisible(true);
         
         if (numberOfSnakes > 1)
-            ShowMessage("Trace Snake 1! Find the " + (flipColors ? "GREEN" : "RED") + " tail");
+            ShowMessage("Trace Snake #1! Find the " + (flipColors ? "GREEN" : "RED") + " tail");
         else
             ShowMessage("Your turn!");
     }
@@ -1233,12 +1283,12 @@ public class GridMarker : MonoBehaviour
                 int completedSnake = currentSnakeIndex + 1;  // 1-indexed for display
                 int nextSnake = currentSnakeIndex + 2;       // 1-indexed for display
                 
-                // Move to next snake
+                // Move to next snake in trace order
                 currentSnakeIndex++;
-                targetPath = allTargetPaths[currentSnakeIndex];
+                targetPath = allTargetPaths[traceOrder[currentSnakeIndex]];
                 ClearUserPath();
                 currentState = GameState.WaitForTail;
-                ShowMessage("Snake " + completedSnake + " done! Now trace Snake " + nextSnake + "!");
+                ShowMessage("Snake #" + completedSnake + " done! Now trace Snake #" + nextSnake + "!");
             }
             else
             {
@@ -1258,7 +1308,7 @@ public class GridMarker : MonoBehaviour
 
             if (remainingChances > 0)
             {
-                ShowMessage("Try again! Snake " + (currentSnakeIndex + 1));
+                ShowMessage("Try again! Snake #" + (currentSnakeIndex + 1));
                 ClearUserPath();
                 currentState = GameState.Fail;
                 StartCoroutine(RetryWithSamePath());
@@ -1279,9 +1329,10 @@ public class GridMarker : MonoBehaviour
         yield return new WaitForSeconds(1.5f);
         if (sessionEnded)
             yield break;
-        // Reset to first snake and show all again
+        // Reset to first snake and show all again in SAME order
         currentSnakeIndex = 0;
-        targetPath = allTargetPaths[0];
+        targetPath = allTargetPaths[traceOrder[0]];  // First snake in trace order
+        isRetry = true;  // Keep same display order (and trace order)
         StartCoroutine(DisplayAllSnakesCoroutine());
     }
 
