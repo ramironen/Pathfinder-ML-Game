@@ -44,6 +44,10 @@ public static class CsvSessionExporter
 {
     const string Header =
         "SessionNumber," +
+        "PlayerName," +
+        "PlayerAge [y]," +
+        "PlayerGender," +
+        "IsRegistered [0/1]," +
         "Time," +
         "GameDuration [s]," +
         "PathsTotal [-]," +
@@ -54,6 +58,15 @@ public static class CsvSessionExporter
         "SuccessRate [0-1]," +
         "MaxStageReached [-]," +
         "BenchmarkScore [0-1]";
+
+    /// <summary>
+    /// Sequential index for the next session row in this player's <c>*_sessions.csv</c>
+    /// (matches <see cref="AppendRow"/>). Use for path rows in the same play session.
+    /// </summary>
+    public static int GetNextSessionNumber(string playerName)
+    {
+        return ComputeNextSessionNumber(GetCsvPath(playerName));
+    }
 
     /// <summary>
     /// Get the CSV file path for a specific player
@@ -112,6 +125,10 @@ public static class CsvSessionExporter
         string[] cells =
         {
             sessionNumber.ToString(CultureInfo.InvariantCulture),
+            Escape(p.PlayerName),
+            p.PlayerAge.ToString(CultureInfo.InvariantCulture),
+            Escape(p.PlayerGender),
+            p.IsRegistered.ToString(CultureInfo.InvariantCulture),
             Escape(FormatSimpleLocalTime(localNow)),
             p.GameDurationSeconds.ToString(CultureInfo.InvariantCulture),
             p.PathsTotal.ToString(CultureInfo.InvariantCulture),

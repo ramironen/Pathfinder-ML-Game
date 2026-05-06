@@ -238,6 +238,7 @@ public class GridMarkers : MonoBehaviour
         sessionPlaySecondsAccumulated = 0f;
         sessionStartTime = Time.time;
         csvRowCommitted = false;
+        PlayerPrefs.SetInt("SessionNumber", CsvSessionExporter.GetNextSessionNumber(PlayerPrefs.GetString("PlayerName", "Guest")));
         ShowMessage("Press SPACE to start");
         UpdateScoreDisplay();
         UpdateSessionTimerDisplay();
@@ -1260,22 +1261,22 @@ public class GridMarkers : MonoBehaviour
         }
         else
         {
-            // Build and shuffle new display order
+            // Real snakes first (shuffled among themselves); dummy snakes always after
             displayOrder = new List<int>();
             for (int i = 0; i < numberOfSnakes; i++)
                 displayOrder.Add(i);  // Real snakes: 0, 1, 2...
-            for (int i = 0; i < dummyPaths.Count; i++)
-                displayOrder.Add(-(i + 1));  // Dummy snakes: -1, -2...
-            
-            // Shuffle display order
-            for (int i = displayOrder.Count - 1; i > 0; i--)
+
+            for (int i = numberOfSnakes - 1; i > 0; i--)
             {
                 int j = Random.Range(0, i + 1);
                 int temp = displayOrder[i];
                 displayOrder[i] = displayOrder[j];
                 displayOrder[j] = temp;
             }
-            
+
+            for (int i = 0; i < dummyPaths.Count; i++)
+                displayOrder.Add(-(i + 1));  // Dummy snakes: -1, -2... always last
+
             // Save for potential retry
             savedDisplayOrder = new List<int>(displayOrder);
             
@@ -1288,7 +1289,7 @@ public class GridMarkers : MonoBehaviour
             }
         }
 
-        // Display all snakes in shuffled order
+        // Display real snakes (random order), then dummy snakes
         int realSnakeDisplayNum = 0;
         for (int displayIdx = 0; displayIdx < displayOrder.Count; displayIdx++)
         {
@@ -1602,6 +1603,7 @@ public class GridMarkers : MonoBehaviour
             PlayerName = PlayerPrefs.GetString("PlayerName", "Unknown"),
             PlayerAge = PlayerPrefs.GetInt("PlayerAge", 0),
             PlayerGender = PlayerPrefs.GetString("PlayerGender", "Unknown"),
+            SessionNumber = PlayerPrefs.GetInt("SessionNumber", 1),
             SessionDate = System.DateTime.Now.ToString("yyyy-MM-dd"),
             SessionID = PlayerPrefs.GetInt("SessionCount", 1),
             PathNumber = totalPathNumber,
