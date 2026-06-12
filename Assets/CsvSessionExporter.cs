@@ -35,6 +35,7 @@ public struct SessionCsvPayload
     // New fields for stage system
     public int MaxStageReached;
     public float BenchmarkScore;  // Success rate on stage 0 (benchmark)
+    public int MlAdaptive;
 }
 
 /// <summary>
@@ -57,7 +58,8 @@ public static class CsvSessionExporter
         "SecondsPlayed [s]," +
         "SuccessRate [0-1]," +
         "MaxStageReached [-]," +
-        "BenchmarkScore [0-1]";
+        "BenchmarkScore [0-1]," +
+        "MlAdaptive [0/1]";
 
     /// <summary>
     /// Sequential index for the next session row in this player's <c>*_sessions.csv</c>
@@ -138,7 +140,8 @@ public static class CsvSessionExporter
             p.SecondsPlayed.ToString(CultureInfo.InvariantCulture),
             p.SuccessRate.ToString("F3", CultureInfo.InvariantCulture),
             p.MaxStageReached.ToString(CultureInfo.InvariantCulture),
-            p.BenchmarkScore.ToString("F3", CultureInfo.InvariantCulture)
+            p.BenchmarkScore.ToString("F3", CultureInfo.InvariantCulture),
+            p.MlAdaptive.ToString(CultureInfo.InvariantCulture)
         };
 
         string line = string.Join(",", cells);

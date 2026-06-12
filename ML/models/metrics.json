@@ -1,0 +1,13 @@
+{
+  "train_rows": 970,
+  "test_rows": 243,
+  "test_players": [
+    "Amnon",
+    "Rina",
+    "Shira",
+    "Tamar"
+  ],
+  "test_accuracy": 0.7407,
+  "test_auc": 0.8171,
+  "epochs_ran": 100
+}

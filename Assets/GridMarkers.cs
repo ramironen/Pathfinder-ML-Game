@@ -202,6 +202,21 @@ public class GridMarkers : MonoBehaviour
     private bool firstMoveMade;      // Track if first move recorded
     private int totalPathNumber;     // Total paths in this session (for CSV)
 
+    // ML adaptive difficulty (optional, set on registration screen)
+    private bool useMlAdaptive;
+    private PathfinderMlPredictor mlPredictor;
+    private readonly List<MlPathHistoryEntry> sessionPathHistory = new List<MlPathHistoryEntry>();
+    private float lastPredictedPSuccess = -1f;
+    const float MlHighThreshold = 0.75f;
+    const float MlLowThreshold = 0.45f;
+
+    struct MlPathHistoryEntry
+    {
+        public int Stage;
+        public int Success;
+        public float PathDurationMs;
+    }
+
     void Start()
     {
         // Set camera background to dark space color (matches theme)
@@ -239,7 +254,19 @@ public class GridMarkers : MonoBehaviour
         sessionStartTime = Time.time;
         csvRowCommitted = false;
         PlayerPrefs.SetInt("SessionNumber", CsvSessionExporter.GetNextSessionNumber(PlayerPrefs.GetString("PlayerName", "Guest")));
-        ShowMessage("Press SPACE to start");
+
+        useMlAdaptive = PlayerPrefs.GetInt("UseMlAdaptive", 0) == 1;
+        if (useMlAdaptive)
+        {
+            mlPredictor = new PathfinderMlPredictor();
+            if (!mlPredictor.TryLoad())
+            {
+                Debug.LogWarning("Pathfinder ML: adaptive mode disabled — model failed to load.");
+                useMlAdaptive = false;
+            }
+        }
+
+        ShowMessage(useMlAdaptive ? "Press SPACE to start (ML adaptive)" : "Press SPACE to start");
         UpdateScoreDisplay();
         UpdateSessionTimerDisplay();
 
@@ -325,6 +352,12 @@ public class GridMarkers : MonoBehaviour
             benchmarkTotal++;
             if (success) benchmarkSuccesses++;
         }
+
+        if (currentStage > maxStageReached)
+            maxStageReached = currentStage;
+
+        if (useMlAdaptive)
+            return;
         
         // Check if we've completed enough paths in this stage
         if (pathsInCurrentStage >= pathsPerStage)
@@ -712,6 +745,9 @@ public class GridMarkers : MonoBehaviour
         int gameDurationSeconds = useSnapshot
             ? PathfinderRegistrationSnapshot.GameDurationSeconds
             : PlayerPrefs.GetInt("GameDurationSeconds", 300);
+        int mlAdaptive = useSnapshot
+            ? PathfinderRegistrationSnapshot.UseMlAdaptive
+            : PlayerPrefs.GetInt("UseMlAdaptive", 0);
 
         float difficultyScore = CalculateDifficultyScore(pathLength, numberOfTurns, displayTime, segmentDelay);
         float successRate = pathsCount > 0 ? (float)successCount / pathsCount : 0f;
@@ -746,8 +782,125 @@ public class GridMarkers : MonoBehaviour
             SuccessRate = successRate,
             PerformanceGrade = performanceGrade,
             MaxStageReached = maxStageReached,
-            BenchmarkScore = benchmarkScore
+            BenchmarkScore = benchmarkScore,
+            MlAdaptive = mlAdaptive
         };
+    }
+
+    void ApplyMlAdaptiveStageBeforePath()
+    {
+        if (!useMlAdaptive || mlPredictor == null || !mlPredictor.IsLoaded || !useStageProgression)
+            return;
+
+        float[] features = BuildMlFeatureVector();
+        float p = mlPredictor.Predict(features);
+        lastPredictedPSuccess = p;
+
+        int prevStage = currentStage;
+        int newStage = currentStage;
+        if (p > MlHighThreshold)
+            newStage = Mathf.Min(currentStage + 1, stages.Length - 1);
+        else if (p < MlLowThreshold)
+            newStage = Mathf.Max(currentStage - 1, 0);
+
+        if (newStage != prevStage)
+        {
+            currentStage = newStage;
+            currentStageAttempt = 1;
+            pathsInCurrentStage = 0;
+            successesInCurrentStage = 0;
+            if (currentStage > maxStageReached)
+                maxStageReached = currentStage;
+            ApplyStageSettings(stages[currentStage]);
+            CenterGridInView();
+            GenerateGridVisuals();
+            PositionUIRelativeToGrid();
+            UpdateStageUI();
+        }
+    }
+
+    float[] BuildMlFeatureVector()
+    {
+        StageSettings stage = (currentStage < stages.Length) ? stages[currentStage] : stages[0];
+
+        int pathsDone = sessionPathHistory.Count;
+        float successRate = 0f;
+        float benchmarkRate = 0f;
+        float stageRate = 0f;
+        float avgDuration = 0f;
+        float lastSuccess = 0f;
+
+        if (pathsDone > 0)
+        {
+            int successes = 0;
+            int benchSuccesses = 0;
+            int benchTotal = 0;
+            int stageSuccesses = 0;
+            int stageTotal = 0;
+            float durationSum = 0f;
+            int durationCount = 0;
+
+            foreach (MlPathHistoryEntry entry in sessionPathHistory)
+            {
+                successes += entry.Success;
+                if (entry.Stage == 0)
+                {
+                    benchTotal++;
+                    benchSuccesses += entry.Success;
+                }
+                if (entry.Stage == currentStage)
+                {
+                    stageTotal++;
+                    stageSuccesses += entry.Success;
+                }
+                if (entry.PathDurationMs > 0f)
+                {
+                    durationSum += entry.PathDurationMs;
+                    durationCount++;
+                }
+            }
+
+            successRate = (float)successes / pathsDone;
+            benchmarkRate = benchTotal > 0 ? (float)benchSuccesses / benchTotal : 0f;
+            stageRate = stageTotal > 0 ? (float)stageSuccesses / stageTotal : 0f;
+            avgDuration = durationCount > 0 ? durationSum / durationCount : 0f;
+            lastSuccess = sessionPathHistory[pathsDone - 1].Success;
+        }
+
+        return new float[]
+        {
+            currentStage,
+            currentStageAttempt,
+            stage.gridSize,
+            stage.pathLength,
+            stage.numberOfTurns,
+            stage.numberOfSnakes,
+            stage.numberOfDummySnakes,
+            0f,
+            stage.displayTime,
+            stage.segmentDelay,
+            stage.delayBeforeRecall,
+            pathsDone,
+            successRate,
+            benchmarkRate,
+            stageRate,
+            avgDuration,
+            lastSuccess
+        };
+    }
+
+    void RecordCompletedPathForMl(bool success, float pathDurationMs)
+    {
+        if (!useMlAdaptive)
+            return;
+
+        sessionPathHistory.Add(new MlPathHistoryEntry
+        {
+            Stage = currentStage,
+            Success = success ? 1 : 0,
+            PathDurationMs = pathDurationMs
+        });
+        currentStageAttempt++;
     }
 
     /// <summary>
@@ -928,6 +1081,8 @@ public class GridMarkers : MonoBehaviour
     {
         if (SessionBlocksInput())
             return;
+
+        ApplyMlAdaptiveStageBeforePath();
 
         // Increment total path counter
         totalPathNumber++;
@@ -1411,7 +1566,7 @@ public class GridMarkers : MonoBehaviour
         // Start timing for this path
         pathStartTime = Time.time;
         firstMoveMade = false;
-        
+
         if (numberOfSnakes > 1)
             ShowMessage("Trace Snake #1! Find the " + (flipColors ? "GREEN" : "RED") + " tail");
         else
@@ -1546,7 +1701,6 @@ public class GridMarkers : MonoBehaviour
                 pathsCount++;
                 successCount++;
                 UpdateScoreDisplay();
-                
                 // Log path data to CSV
                 LogPathToCSV(true);
                 
@@ -1575,7 +1729,6 @@ public class GridMarkers : MonoBehaviour
                 pathsCount++;
                 failCount++;
                 UpdateScoreDisplay();
-                
                 // Log path data to CSV
                 LogPathToCSV(false);
                 
@@ -1605,7 +1758,6 @@ public class GridMarkers : MonoBehaviour
             PlayerGender = PlayerPrefs.GetString("PlayerGender", "Unknown"),
             SessionNumber = PlayerPrefs.GetInt("SessionNumber", 1),
             SessionDate = System.DateTime.Now.ToString("yyyy-MM-dd"),
-            SessionID = PlayerPrefs.GetInt("SessionCount", 1),
             PathNumber = totalPathNumber,
             Stage = currentStage,
             StageName = (currentStage < stages.Length) ? stages[currentStage].stageName : "Unknown",
@@ -1622,8 +1774,12 @@ public class GridMarkers : MonoBehaviour
             Success = success ? 1 : 0,
             PathDurationMs = pathDurationMs,
             FirstMoveDelayMs = firstMoveDelayMs,
-            TimeInSessionMs = timeInSessionMs
+            TimeInSessionMs = timeInSessionMs,
+            MlAdaptive = useMlAdaptive ? 1 : 0,
+            PredictedPSuccess = useMlAdaptive ? lastPredictedPSuccess : -1f
         });
+
+        RecordCompletedPathForMl(success, pathDurationMs);
     }
 
     IEnumerator RetryWithSamePath()

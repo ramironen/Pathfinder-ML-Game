@@ -17,6 +17,7 @@ public static class PathfinderRegistrationSnapshot
     public static string PlayerGender;
     public static int IsRegistered;
     public static int GameDurationSeconds;
+    public static int UseMlAdaptive;
 
     public static void Clear()
     {
@@ -27,10 +28,11 @@ public static class PathfinderRegistrationSnapshot
         PlayerGender = null;
         IsRegistered = 0;
         GameDurationSeconds = 300;  // Default 5 minutes
+        UseMlAdaptive = 0;
     }
 
     /// <summary>Call only after <c>PlayerPrefs.Save()</c> for this submit (SessionId must already be set).</summary>
-    public static void Capture(string playerName, int playerAge, string playerGender, int isRegistered, int gameDurationSeconds)
+    public static void Capture(string playerName, int playerAge, string playerGender, int isRegistered, int gameDurationSeconds, int useMlAdaptive)
     {
         HasData = true;
         CapturedSessionId = PlayerPrefs.GetString("SessionId", "");
@@ -39,6 +41,7 @@ public static class PathfinderRegistrationSnapshot
         PlayerGender = playerGender ?? string.Empty;
         IsRegistered = isRegistered;
         GameDurationSeconds = gameDurationSeconds;
+        UseMlAdaptive = useMlAdaptive;
     }
 }
 
@@ -58,6 +61,8 @@ public class RegistrationManager : MonoBehaviour
     public Button sessionTime2mButton;
     public Button sessionTime5mButton;
     public Button sessionTime10mButton;
+    public Button mlAdaptiveOnButton;
+    public Button mlAdaptiveOffButton;
 
     [Header("Buttons")]
     public Button maleButton;
@@ -69,14 +74,18 @@ public class RegistrationManager : MonoBehaviour
     private readonly Color selectedColor = new Color(0.5f, 1f, 0.5f);
     private readonly Color normalColor = Color.white;
     private int selectedSessionSeconds = 60;
+    private bool selectedUseMlAdaptive;
 
     void Start()
     {
         PathfinderRegistrationSnapshot.Clear();
         selectedSessionSeconds = 60;
+        selectedUseMlAdaptive = false;
         ClearError();
         WireSessionTimeButtons();
+        WireMlAdaptiveButtons();
         RefreshSessionTimeButtonColors();
+        RefreshMlAdaptiveButtonColors();
 
         maleButton.onClick.AddListener(() => SelectGender("Male"));
         femaleButton.onClick.AddListener(() => SelectGender("Female"));
@@ -94,6 +103,27 @@ public class RegistrationManager : MonoBehaviour
             sessionTime5mButton.onClick.AddListener(() => SelectSessionDuration(300));
         if (sessionTime10mButton != null)
             sessionTime10mButton.onClick.AddListener(() => SelectSessionDuration(600));
+    }
+
+    void WireMlAdaptiveButtons()
+    {
+        if (mlAdaptiveOnButton != null)
+            mlAdaptiveOnButton.onClick.AddListener(() => SelectMlAdaptive(true));
+        if (mlAdaptiveOffButton != null)
+            mlAdaptiveOffButton.onClick.AddListener(() => SelectMlAdaptive(false));
+    }
+
+    void SelectMlAdaptive(bool enabled)
+    {
+        selectedUseMlAdaptive = enabled;
+        RefreshMlAdaptiveButtonColors();
+        ClearError();
+    }
+
+    void RefreshMlAdaptiveButtonColors()
+    {
+        SetTimeButtonVisual(mlAdaptiveOnButton, selectedUseMlAdaptive);
+        SetTimeButtonVisual(mlAdaptiveOffButton, !selectedUseMlAdaptive);
     }
 
     void SelectSessionDuration(int seconds)
@@ -226,9 +256,11 @@ public class RegistrationManager : MonoBehaviour
         PlayerPrefs.SetString("PlayerGender", selectedGender);
         PlayerPrefs.SetInt("IsRegistered", 1);
         PlayerPrefs.SetInt("GameDurationSeconds", selectedSessionSeconds);
+        PlayerPrefs.SetInt("UseMlAdaptive", selectedUseMlAdaptive ? 1 : 0);
         PlayerPrefs.Save();
 
-        PathfinderRegistrationSnapshot.Capture(playerName, age, selectedGender, 1, selectedSessionSeconds);
+        PathfinderRegistrationSnapshot.Capture(playerName, age, selectedGender, 1, selectedSessionSeconds,
+            selectedUseMlAdaptive ? 1 : 0);
 
         SceneManager.LoadScene("SnakeScene");
     }
@@ -242,9 +274,10 @@ public class RegistrationManager : MonoBehaviour
         PlayerPrefs.SetString("PlayerGender", "");
         PlayerPrefs.SetInt("IsRegistered", 0);
         PlayerPrefs.SetInt("GameDurationSeconds", 300);  // 5 minutes
+        PlayerPrefs.SetInt("UseMlAdaptive", selectedUseMlAdaptive ? 1 : 0);
         PlayerPrefs.Save();
 
-        PathfinderRegistrationSnapshot.Capture("Guest", 0, "", 0, 300);
+        PathfinderRegistrationSnapshot.Capture("Guest", 0, "", 0, 300, selectedUseMlAdaptive ? 1 : 0);
 
         SceneManager.LoadScene("SnakeScene");
     }

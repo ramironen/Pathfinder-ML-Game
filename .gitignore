@@ -1,9 +1,13 @@
+# Unity generated
 [Ll]ibrary/
 [Tt]emp/
 [Bb]uild/
 [Bb]uilds/
+[Bb]uild_wind/
 [Ll]ogs/
-UserSettings/
+[Uu]ser[Ss]ettings/
+
+# IDE / OS
 *.csproj
 *.unityproj
 *.sln
@@ -13,8 +17,25 @@ UserSettings/
 *.svd
 .DS_Store
 .vscode/
+Assets/.vscode/
 
-# Unity: keep committing Assets/**/*.meta next to each asset (do not ignore *.meta).
+# Python
+ML/__pycache__/
+*.pyc
+.venv/
+venv/
 
-# Runtime-generated session export (CsvSessionExporter)
+# Local exports and build artifacts
+Data/
 pathfinder_sessions.csv
+*.ods
+*.zip
+PathFinder.pdf
+
+# Keep Assets/**/*.meta next to each asset (do not ignore *.meta).
+
+ML/generate_synthetic_data.py
+Assets/Documentation/
+Assets/Sprites/
+Assets/Sprites.meta
+Assets/Documentation.meta
